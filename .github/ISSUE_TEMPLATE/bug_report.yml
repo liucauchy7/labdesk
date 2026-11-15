@@ -1,0 +1,46 @@
+name: 问题反馈
+description: 页面报错、数据不对、按钮没反应
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      placeholder: 例如：点「保存分析」后一直转圈，控制台报 502
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开协作平台
+        2. 添加文献分析，选择一个 PDF
+        3. 点保存
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: 设备
+      options:
+        - 安卓 App
+        - iPhone（Safari 添加到主屏幕）
+        - Windows（Edge / Chrome）
+        - Mac（Safari / Chrome）
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 左侧栏底部或登录页显示的版本号
+      placeholder: 例如 1.3.6
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我没有在这里粘贴访问码、实验数据或原始照片
+          required: true

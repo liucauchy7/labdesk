@@ -1,0 +1,45 @@
+name: 功能建议
+description: 希望工作台增加或修改什么功能
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢提建议。越具体越好：现在怎么用、哪里别扭、希望变成什么样。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 现在的问题
+      description: 描述当前的做法和痛点
+      placeholder: 例如：测量记录一次只能选一个文件，测一整套要重复操作很多次
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望怎么改
+      description: 你理想中的交互或结果
+      placeholder: 例如：能一次拖入多个文件，自动按顺序建记录
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响范围
+      options:
+        - 测量记录
+        - 文献协作
+        - 卫生与仪器
+        - Harness 平台 / 创意工坊
+        - 中英文界面
+        - 其他
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我确认这不包含实验数据、访问码或任何密钥
+          required: true
