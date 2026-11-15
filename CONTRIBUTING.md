@@ -6,7 +6,7 @@
 
 ```sh
 git clone <仓库地址> labdesk
-cd labdesk/app
+cd labdesk
 ./dev-server.sh            # 默认 127.0.0.1:8799，访问码 devtoken
 ```
 
@@ -20,13 +20,13 @@ cd labdesk/app
 
 | 文件 | 作用 |
 |---|---|
-| `app/server.py` | 全部接口、鉴权、数据结构 |
-| `app/public/app.js` | 前端所有页面渲染与交互 |
-| `app/public/index.html` | 页面骨架、导航、图标 |
-| `app/public/styles.css` | 样式 |
-| `app/public/i18n.js` | 中英文词条 |
-| `app/pdf_worker.py` `app/asr_worker.py` | PDF / 语音的可选子进程 |
-| `app/android/` `app/ios/` | 移动端外壳工程 |
+| `server.py` | 全部接口、鉴权、数据结构 |
+| `public/app.js` | 前端所有页面渲染与交互 |
+| `public/index.html` | 页面骨架、导航、图标 |
+| `public/styles.css` | 样式 |
+| `public/i18n.js` | 中英文词条 |
+| `pdf_worker.py` `asr_worker.py` | PDF / 语音的可选子进程 |
+| `android/` `ios/` | 移动端外壳工程 |
 
 改完刷新页面即可；改 `server.py` 需要重启 `dev-server.sh`。
 
@@ -36,8 +36,8 @@ cd labdesk/app
 2. 只提交源码，**不要提交** `storage/`、`android/.tooling/`、任何访问码或真实实验数据（`.gitignore` 已排除）；
 3. 提交前自检：
    ```sh
-   python3 -c "import ast; ast.parse(open('app/server.py').read())"   # 语法
-   ./app/dev-server.sh 8799 &                                          # 起服务
+   python3 -c "import ast; ast.parse(open('server.py').read())"   # 语法
+   ./dev-server.sh 8799 &                                          # 起服务
    curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8799/     # 应为 200
    ```
 4. 发 Pull Request，说明「改了什么 / 为什么 / 怎么验证」。
