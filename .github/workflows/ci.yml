@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Python syntax
+        run: python -m compileall -q server.py pdf_worker.py asr_worker.py
+
+      - name: JavaScript syntax
+        run: |
+          node --check public/app.js
+          node --check public/i18n.js
+          node --check public/workshop/precursor-calculator.js
+
+      - name: Server smoke test
+        env:
+          LAB_APP_TOKEN: ci-test-token
+          LAB_APP_DATA_DIR: /tmp/labdesk-ci
+        run: |
+          mkdir -p /tmp/labdesk-ci
+          python server.py --host 127.0.0.1 --port 8899 &
+          for i in $(seq 1 20); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8899/; then break; fi
+            sleep 0.5
+          done
+          curl -fsS -o /dev/null -w 'index %{http_code}\n' http://127.0.0.1:8899/
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-test-token' http://127.0.0.1:8899/api/state)" = "200"
