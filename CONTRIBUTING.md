@@ -42,6 +42,40 @@ cd labdesk/app
    ```
 4. 发 Pull Request，说明「改了什么 / 为什么 / 怎么验证」。
 
+## 3.1 拿到代码的两种方式
+
+**方式一：私有仓库（推荐）**
+
+管理员把仓库推到 Gitee / GitHub 私有库后，直接：
+
+```sh
+git clone <仓库地址> labdesk
+```
+
+**方式二：离线包（没有仓库时）**
+
+管理员会给你一个 `labdesk.bundle` 文件：
+
+```sh
+git clone labdesk.bundle labdesk
+cd labdesk/app
+./dev-server.sh
+```
+
+### 把改动发回来
+
+```sh
+# 推荐：推分支到私有仓库，然后发 PR
+git checkout -b feature/measure-input
+git commit -am "测量记录：支持一次选择多个文件"
+git push origin feature/measure-input
+
+# 没有推送权限时：导出补丁发给管理员
+git format-patch main --stdout > measure-input.patch
+```
+
+管理员在 Mac Mini 上执行 `git am measure-input.patch`（或直接合并 PR）后运行 `./deploy-macos.sh` 上线。
+
 ## 4. 上线
 
 线上只在这台 Mac Mini 上部署，由管理员执行：
