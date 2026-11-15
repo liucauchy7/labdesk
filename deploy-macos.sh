@@ -12,6 +12,7 @@ rsync -a "$app_source/android/dist/" "$runtime/android/dist/"
 rsync -a "$app_source/storage/" "$data/"
 cp "$app_source/server.py" "$runtime/server.py"
 cp "$app_source/asr_worker.py" "$runtime/asr_worker.py"
+if [ -f "$app_source/zones.local.json" ]; then cp "$app_source/zones.local.json" "$runtime/zones.local.json"; fi
 cp "$app_source/pdf_worker.py" "$runtime/pdf_worker.py"
 cp "$app_source/../outputs/260930-T.import.json" "$deploy_root/outputs/260930-T.import.json"
 cp "$app_source/../数据平台落地方案.md" "$deploy_root/数据平台落地方案.md"

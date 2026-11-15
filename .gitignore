@@ -11,3 +11,4 @@ public/downloads/*.zip
 secrets/
 *.pem
 *.key
+zones.local.json

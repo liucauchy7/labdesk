@@ -72,24 +72,28 @@ LLM_FALLBACK_BASE_URL = ""
 LLM_FALLBACK_MODEL = ""
 LLM_FALLBACK_API_KEY = ""
 
-ZONES = [
-    {"id": "organic-coating", "name": "有机镀膜", "category": "仪器", "group": "薄膜制备", "type": "device", "assignees": ["葛成龙"]},
-    {"id": "thermal-evaporation", "name": "热蒸发", "category": "仪器", "group": "薄膜制备", "type": "device", "assignees": ["许睿祺"]},
-    {"id": "magnetron-sputtering", "name": "磁控溅射", "category": "仪器", "group": "薄膜制备", "type": "device", "assignees": ["于杭", "赵亚鑫"]},
-    {"id": "ald", "name": "ALD", "category": "仪器", "group": "薄膜制备", "type": "device", "assignees": ["刘高奇"]},
-    {"id": "eqe-small-room", "name": "小房间 EQE", "category": "仪器", "group": "表征设备", "type": "device", "assignees": ["葛成龙"]},
-    {"id": "building-7-floor", "name": "七号楼地面", "category": "公共区域", "group": "七号楼", "type": "area", "assignees": []},
-    {"id": "building-7-benches", "name": "七号楼台面", "category": "公共区域", "group": "七号楼", "type": "area", "assignees": []},
-    {"id": "building-5-floor", "name": "五号楼地面", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": []},
-    {"id": "building-5-benches", "name": "五号楼台面", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": []},
-    {"id": "b5-storage-organization", "name": "仓库收纳管理", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["蒋静韬", "吴松阳", "鲁佳兴"]},
-    {"id": "b5-fume-hood-benches", "name": "通风橱侧台面及架子", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["郎海涛", "涂江升"]},
-    {"id": "b5-glovebox-benches", "name": "手套箱侧台面及架子", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["姚志毅", "蒋静韬"]},
-    {"id": "b5-quantum-dot-bench", "name": "量子点台面", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["马梓耀"]},
-    {"id": "b5-muffle-furnace-shelf", "name": "马弗炉架子", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["刘高奇"]},
-    {"id": "b5-synthesis-fume-hood", "name": "合成通风橱", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["张书翰"]},
-    {"id": "b5-blade-coating-hood", "name": "刮涂通风橱", "category": "公共区域", "group": "五号楼", "type": "area", "assignees": ["刘高奇", "皇甫洁"]},
+ZONES_FILE = Path(os.environ.get("LAB_ZONES_FILE", "")).expanduser() if os.environ.get("LAB_ZONES_FILE") else Path(__file__).resolve().parent / "zones.local.json"
+
+PLACEHOLDER_ZONES = [
+    {"id": "area-1", "name": "示例区域 1", "category": "公共区域", "group": "示例楼", "type": "area", "assignees": []},
+    {"id": "area-2", "name": "示例区域 2", "category": "公共区域", "group": "示例楼", "type": "area", "assignees": []},
+    {"id": "device-1", "name": "示例仪器 1", "category": "仪器", "group": "示例组", "type": "device", "assignees": []},
+    {"id": "device-2", "name": "示例仪器 2", "category": "仪器", "group": "示例组", "type": "device", "assignees": []},
 ]
+
+
+def load_zones():
+    if ZONES_FILE.is_file():
+        try:
+            data = json.loads(ZONES_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data and all(isinstance(item, dict) and item.get("id") for item in data):
+                return data
+        except (OSError, ValueError) as exc:
+            print("Cannot read zones file: %s" % exc)
+    return PLACEHOLDER_ZONES
+
+
+ZONES = load_zones()
 
 
 WORKSHOP = [
