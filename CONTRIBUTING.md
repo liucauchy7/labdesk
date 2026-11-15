@@ -50,6 +50,7 @@ cd labdesk/app
 
 ```sh
 git clone <仓库地址> labdesk
+cd labdesk
 ```
 
 **方式二：离线包（没有仓库时）**
@@ -58,7 +59,7 @@ git clone <仓库地址> labdesk
 
 ```sh
 git clone labdesk.bundle labdesk
-cd labdesk/app
+cd labdesk
 ./dev-server.sh
 ```
 
