@@ -1,0 +1,25 @@
+name: LabDeskIOS
+options:
+  bundleIdPrefix: cn.ninglab
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+targets:
+  LabDeskIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: LabDeskIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cn.ninglab.labdesk.ios
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: LabDeskIOS/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic

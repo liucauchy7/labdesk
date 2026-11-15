@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f7f4">
+<link rel="icon" href="../icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../icon-180.png">
+<title>钙钛矿前驱体配方计算器 · 马鸣宇</title>
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="./workshop.css">
+</head>
+<body class="ws-body">
+<main class="ws-wrap">
+  <header class="ws-head">
+    <a class="ws-back" id="wsBack" href="../#forum">← 返回工作台</a>
+    <h1>钙钛矿前驱体配方计算器</h1>
+    <p class="ws-sub">设计：马鸣宇 · 离线可用 · 数据只存在本机浏览器</p>
+  </header>
+
+  <section class="ws-inputs">
+    <label>浓度 <span>mol/L</span><input id="conc" type="number" step="0.01" value="1.4"></label>
+    <label>器件数量 <span>片</span><input id="pieces" type="number" step="1" value="10"></label>
+    <label>单片用量 <span>µL</span><input id="perPiece" type="number" step="1" value="50"></label>
+    <label>冗余 <span>%</span><input id="excess" type="number" step="1" value="20"></label>
+    <label>固定损耗 <span>µL</span><input id="loss" type="number" step="1" value="100"></label>
+    <label>天平分辨率 <span>mg</span><input id="balance" type="number" step="0.01" value="0.01"></label>
+  </section>
+
+  <section class="ws-summary">
+    <div><span>理论消耗</span><strong id="theoretical">500</strong><em>µL</em></div>
+    <div><span>额外冗余</span><strong id="extra">200</strong><em>µL</em></div>
+    <div class="accent"><span>建议配液</span><strong id="total">700</strong><em>µL</em></div>
+  </section>
+
+  <div class="ws-grid">
+    <section class="ws-card">
+      <div class="ws-card-head"><h2>配方药品</h2><span id="saltCount"></span></div>
+      <div class="ws-add">
+        <select id="preset"><option value="">选择药品…</option></select>
+        <input id="customName" placeholder="或输入名称">
+        <input id="customMass" type="number" step="0.01" placeholder="摩尔质量 g/mol">
+        <button id="addSalt" class="ws-btn" type="button">添加</button>
+      </div>
+      <div id="saltList" class="ws-salt-list"></div>
+      <p class="ws-note">比例相对主盐参考单元；100 mol% = 1 eq。点击摩尔质量可修改。</p>
+    </section>
+
+    <section class="ws-card">
+      <div class="ws-card-head"><h2>建议称量</h2><span id="nref"></span></div>
+      <div id="weighList" class="ws-weigh-list"></div>
+      <p class="ws-note">按天平最接近刻度四舍五入，括号内为相对目标的偏差。</p>
+    </section>
+  </div>
+
+  <section class="ws-card">
+    <div class="ws-card-head"><h2>溶剂配置</h2><span id="solventTotal"></span></div>
+    <div class="ws-solvent">
+      <input id="solventName" placeholder="例如 DMF:DMSO" value="DMF:DMSO">
+      <input id="solventRatio" placeholder="体积比，例如 4:1" value="4:1">
+    </div>
+    <div id="solventSplit" class="ws-solvent-split"></div>
+  </section>
+
+  <footer class="ws-foot">
+    <div class="ws-actions">
+      <button id="saveRecipe" class="ws-btn primary" type="button">保存配方</button>
+      <select id="savedRecipes"><option value="">已保存配方…</option></select>
+      <button id="loadRecipe" class="ws-btn" type="button">读取</button>
+      <button id="exportCsv" class="ws-btn" type="button">导出 CSV</button>
+      <button id="printPage" class="ws-btn" type="button">打印</button>
+    </div>
+    <p class="ws-credit">工具设计：马鸣宇 · 集成到 Labdesk 创意工坊</p>
+  </footer>
+</main>
+<script src="./precursor-calculator.js"></script>
+</body>
+</html>

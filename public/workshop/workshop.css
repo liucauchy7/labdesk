@@ -1,0 +1,55 @@
+:root { --ws-green: #317964; --ws-green-dark: #245e4e; --ws-line: #e4e9e5; --ws-muted: #727d79; }
+.ws-body { margin: 0; background: #f5f7f4; color: #202b29; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; }
+.ws-wrap { width: min(100%, 1200px); margin: 0 auto; padding: 22px 20px 60px; }
+.ws-head { margin-bottom: 16px; }
+.ws-back { color: var(--ws-green); font-size: 12px; text-decoration: none; }
+.ws-head h1 { margin: 8px 0 4px; font-size: 22px; }
+.ws-sub { margin: 0; color: var(--ws-muted); font-size: 12px; }
+.ws-inputs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px 10px; margin: 6px 0 16px; }
+.ws-inputs label, .ws-summary > div, .ws-grid > *, .ws-card { min-width: 0; }
+.ws-inputs label { display: grid; gap: 4px; font-size: 11px; color: var(--ws-muted); }
+.ws-inputs label span { color: #9aa49f; font-size: 10px; }
+.ws-inputs input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--ws-line); border-radius: 8px; background: #fff; font-size: 14px; }
+.ws-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.ws-summary > div { display: flex; align-items: baseline; gap: 6px; padding: 14px 16px; border: 1px solid var(--ws-line); border-radius: 10px; background: #fff; }
+.ws-summary span { color: var(--ws-muted); font-size: 12px; }
+.ws-summary strong { margin-left: auto; font-size: 24px; color: #1f2b27; font-variant-numeric: tabular-nums; }
+.ws-summary em { font-style: normal; color: var(--ws-muted); font-size: 12px; }
+.ws-summary .accent { border-color: #cfe3d8; background: #f2faf5; }
+.ws-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 12px; margin-bottom: 12px; }
+.ws-card { padding: 14px 16px; border: 1px solid var(--ws-line); border-radius: 10px; background: #fff; }
+.ws-card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.ws-card-head h2 { margin: 0; font-size: 14px; }
+.ws-card-head span { color: var(--ws-muted); font-size: 11px; }
+.ws-add { display: grid; grid-template-columns: 1.2fr 1fr .9fr auto; gap: 6px; margin-bottom: 10px; }
+.ws-add input, .ws-add select, .ws-solvent input, .ws-btn { padding: 7px 9px; border: 1px solid var(--ws-line); border-radius: 7px; background: #fff; font-size: 12px; }
+.ws-btn { cursor: pointer; }
+.ws-btn.primary { background: var(--ws-green); border-color: var(--ws-green); color: #fff; }
+.ws-btn.primary:hover { background: var(--ws-green-dark); }
+.ws-salt-list { display: grid; gap: 6px; }
+.ws-salt-row { display: grid; grid-template-columns: 1.2fr .8fr .7fr .8fr auto; gap: 6px; align-items: center; }
+.ws-salt-row input, .ws-salt-row select { width: 100%; padding: 6px 8px; border: 1px solid var(--ws-line); border-radius: 6px; font-size: 12px; }
+.ws-salt-row .name { font-weight: 600; }
+.ws-del { border: 0; background: none; color: #b0604b; cursor: pointer; font-size: 14px; }
+.ws-weigh-list { display: grid; gap: 8px; }
+.ws-weigh { display: flex; align-items: baseline; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--ws-line); }
+.ws-weigh:last-child { border-bottom: 0; }
+.ws-weigh strong { color: var(--ws-green-dark); font-size: 18px; font-variant-numeric: tabular-nums; }
+.ws-weigh small { margin-left: auto; color: var(--ws-muted); font-size: 10px; }
+.ws-solvent { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.ws-solvent-split { display: flex; flex-wrap: wrap; gap: 8px; }
+.ws-solvent-split span { padding: 6px 10px; border-radius: 7px; background: #f1f7f3; color: var(--ws-green-dark); font-size: 12px; }
+.ws-note { margin: 8px 0 0; color: #9aa49f; font-size: 10px; }
+.ws-foot { margin-top: 14px; }
+.ws-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ws-credit { margin-top: 10px; color: #9aa49f; font-size: 10px; }
+@media (max-width: 860px) {
+  .ws-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ws-summary { grid-template-columns: 1fr; }
+  .ws-grid { grid-template-columns: 1fr; }
+  .ws-add, .ws-salt-row { grid-template-columns: 1fr 1fr; }
+}
+@media print {
+  .ws-back, .ws-add, .ws-actions, .ws-foot .ws-actions { display: none; }
+  .ws-body { background: #fff; }
+}

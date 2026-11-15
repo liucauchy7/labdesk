@@ -1,0 +1,9 @@
+storage/
+__pycache__/
+*.pyc
+android/.tooling/
+android/.gradle/
+android/app/build/
+*.log
+.DS_Store
+public/downloads/*.zip
