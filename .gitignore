@@ -12,3 +12,4 @@ secrets/
 *.pem
 *.key
 zones.local.json
+备案材料/
