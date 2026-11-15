@@ -1,4 +1,4 @@
-const APP_VERSION = "1.3.5";
+const APP_VERSION = "1.3.6";
 
 const state = {
   route: "overview",
@@ -2035,7 +2035,7 @@ function dutyDialog() {
   const next = (duty.weeks || []).find((item) => item.weekStart > (duty.weekStart || ""));
   const content = `<form class="form-grid" id="duty-form">
     <p class="field-help">本周从 ${formatDate(duty.weekStart)} 开始。填好姓名后，首页会显示本周值日生。</p>
-    <div class="field"><label for="duty-names">本周值日生</label><input id="duty-names" maxlength="120" value="${escapeHtml((entry.names || []).join("、"))}" placeholder="例如：刘高奇、郎海涛"><span class="field-help">多个名字用顿号、逗号或空格分隔。</span></div>
+    <div class="field"><label for="duty-names">本周值日生</label><input id="duty-names" maxlength="120" value="${escapeHtml((entry.names || []).join("、"))}" placeholder="例如：张三、李四"><span class="field-help">多个名字用顿号、逗号或空格分隔。</span></div>
     <div class="field"><label for="duty-areas">负责区域（可选）</label><input id="duty-areas" maxlength="200" value="${escapeHtml(entry.areas || "")}" placeholder="例如：五号楼台面、七号楼地面"></div>
     <div class="field"><label for="duty-next-names">下周值日生（可选）</label><input id="duty-next-names" maxlength="120" value="${escapeHtml((next?.names || []).join("、"))}" placeholder="提前安排，下周自动显示"></div>
     <p class="inline-alert" id="duty-error" role="alert"></p>

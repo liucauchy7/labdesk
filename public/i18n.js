@@ -436,7 +436,7 @@ const LABDESK_EN = {
   "排班保存在 Mac Mini，所有组员看到的首页一致。":
     "The roster is stored on the Mac Mini and shown to everyone.",
   "本周值日生": "On duty this week",
-  "例如：刘高奇、郎海涛": "e.g. Liu Gaoqi, Lang Haitao",
+  "例如：张三、李四": "e.g. Zhang San, Li Si",
   "多个名字用顿号、逗号或空格分隔。": "Separate names with commas.",
   "负责区域（可选）": "Areas (optional)",
   "下周值日生（可选）": "Next week (optional)",
