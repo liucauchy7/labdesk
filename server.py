@@ -23,7 +23,7 @@ import wave
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +32,7 @@ STORAGE = Path(__file__).resolve().parent / "storage"
 UPLOADS = STORAGE / "uploads"
 LIBRARY = STORAGE / "library"
 LABDATA = STORAGE / "labdata"
+IDEAMEDIA = STORAGE / "idea-media"
 DB_PATH = STORAGE / "state.json"
 IMPORT_PATH = ROOT / "outputs" / "260930-T.import.json"
 REPORT_PATH = ROOT / "数据平台落地方案.md"
@@ -190,7 +191,7 @@ def save_db(db):
 
 
 IDEA_UPVOTE_THRESHOLD = 5
-IDEA_QUIET_HOURS = 48
+IDEA_QUIET_HOURS = 24
 
 
 def idea_status(idea):
@@ -215,6 +216,10 @@ def idea_status(idea):
 
 def idea_view(idea):
     view = dict(idea)
+    view["images"] = [
+        {"name": item.get("name", ""), "url": "/api/idea-image/%s/%d" % (idea.get("id"), index)}
+        for index, item in enumerate(idea.get("images") or [])
+    ]
     view["status"] = idea_status(idea)
     view["upvoteCount"] = len(idea.get("upvotes") or [])
     view["downvoteCount"] = len(idea.get("downvotes") or [])
@@ -296,6 +301,45 @@ def week_start_iso(offset_weeks=0):
     if offset_weeks:
         monday = monday + timedelta(weeks=offset_weeks)
     return monday.isoformat()
+
+
+WEB_VERSION_CACHE = {"mtime": 0.0, "version": "0"}
+
+
+def web_version():
+    try:
+        stamp = (PUBLIC / "version.json").stat().st_mtime
+        if stamp != WEB_VERSION_CACHE["mtime"]:
+            WEB_VERSION_CACHE["mtime"] = stamp
+            WEB_VERSION_CACHE["version"] = json.loads((PUBLIC / "version.json").read_text(encoding="utf-8")).get("version", "0")
+    except (OSError, ValueError):
+        pass
+    return WEB_VERSION_CACHE["version"]
+
+
+THUMB_LOCK = threading.Lock()
+
+
+def make_thumbnail(source, destination):
+    """Create a small JPEG preview with macOS sips; cached next to the original."""
+    with THUMB_LOCK:
+        if destination.is_file():
+            return True
+        tmp = destination.with_name(destination.name + ".tmp")
+        try:
+            subprocess.run(
+                ["sips", "-Z", "480", "-s", "format", "jpeg", "-s", "formatOptions", "72",
+                 str(source), "--out", str(tmp)],
+                check=True, capture_output=True, timeout=30,
+            )
+            tmp.replace(destination)
+            return True
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return False
 
 
 def current_duty(db):
@@ -751,7 +795,8 @@ class Handler(BaseHTTPRequestHandler):
         else:
             csp = "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"
         self.send_header("Content-Security-Policy", csp)
-        self.send_header("Cache-Control", "no-store")
+        if "cache-control" not in {str(name).lower() for name in (extra_headers or {})}:
+            self.send_header("Cache-Control", "no-store")
         if extra_headers:
             for name, value in extra_headers.items():
                 self.send_header(name, value)
@@ -765,7 +810,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Cache-Control", "private, no-store")
+        extra_names = {str(name).lower() for name in (extra_headers or {})}
+        if "cache-control" not in extra_names:
+            self.send_header("Cache-Control", "private, no-store")
         if extra_headers:
             for name, value in extra_headers.items():
                 self.send_header(name, value)
@@ -858,7 +905,8 @@ class Handler(BaseHTTPRequestHandler):
                 "maintenanceRecords": db["maintenanceRecords"],
                 "library": db["library"],
                 "labRecords": db["labRecords"],
-                "literature": db["literature"],
+                "literature": [],
+                "literatureCount": len(db["literature"]),
                 "ideas": [idea_view(item) for item in db.get("ideas", [])],
                 "trash": db.get("trash", []),
                 "systems": SYSTEMS,
@@ -889,6 +937,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/media/"):
             media_id = path.rsplit("/", 1)[-1]
+            cache_headers = {"Cache-Control": "private, max-age=31536000, immutable"}
+            if media_id.endswith(".thumb.jpg"):
+                base_id = media_id[: -len(".thumb.jpg")]
+                if not re.fullmatch(r"[a-f0-9-]{36}", base_id):
+                    self.send_error(404)
+                    return
+                thumb_path = UPLOADS / media_id
+                if not thumb_path.is_file():
+                    original = next((candidate for candidate in UPLOADS.glob(base_id + ".*")
+                                     if re.fullmatch(r"[a-f0-9-]{36}\.(?:jpg|png|webp)", candidate.name)), None)
+                    if original is None or not make_thumbnail(original, thumb_path):
+                        self.send_error(404)
+                        return
+                self.send_file(200, thumb_path, "image/jpeg", cache_headers)
+                return
             if not re.fullmatch(r"[a-f0-9-]{36}\.(?:jpg|png|webp)", media_id):
                 self.send_error(404)
                 return
@@ -897,7 +960,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-            self.send_file(200, file_path, content_type)
+            self.send_file(200, file_path, content_type, cache_headers)
+            return
+        if path == "/api/literature":
+            with LOCK:
+                db = read_db()
+            self.send_json(200, {"literature": db.get("literature", [])})
             return
         if path.startswith("/api/library/file/"):
             item_id = path.rsplit("/", 1)[-1]
@@ -969,7 +1037,7 @@ class Handler(BaseHTTPRequestHandler):
             approved.sort(key=lambda item: item.get("createdAt", ""))
             lines = ["# 待实现的团队想法", ""]
             if not approved:
-                lines.append("（暂无达到条件的想法：需要 5 个赞，或发布满 48 小时且无人反对。）")
+                lines.append("（暂无达到条件的想法：需要 5 个赞，或发布满 24 小时且无人反对。）")
             for index, idea in enumerate(approved, 1):
                 lines.append("## %d. %s" % (index, idea.get("title", "")))
                 lines.append("")
@@ -981,6 +1049,28 @@ class Handler(BaseHTTPRequestHandler):
                     lines.append(idea["body"])
                 lines.append("")
             self.send_bytes(200, ("\n".join(lines) + "\n").encode("utf-8"), "text/markdown; charset=utf-8")
+            return
+        if path.startswith("/api/idea-image/"):
+            parts = path.split("/")
+            if len(parts) != 5:
+                self.send_error(404)
+                return
+            idea_id, index_text = parts[3], parts[4]
+            with LOCK:
+                db = read_db()
+            idea = next((item for item in db.get("ideas", []) if item.get("id") == idea_id), None)
+            images = (idea or {}).get("images") or []
+            try:
+                entry = images[int(index_text)]
+            except (ValueError, IndexError):
+                self.send_error(404)
+                return
+            stored = IDEAMEDIA / idea_id / entry.get("storedName", "")
+            if not stored.is_file():
+                self.send_error(404)
+                return
+            content_type = mimetypes.guess_type(stored.name)[0] or "application/octet-stream"
+            self.send_file(200, stored, content_type)
             return
         if path.startswith("/api/lab-data/"):
             parts = path.split("/")
@@ -1016,6 +1106,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         content_type = "application/manifest+json" if candidate.name.endswith(".webmanifest") else (mimetypes.guess_type(candidate.name)[0] or "application/octet-stream")
         charset = "; charset=utf-8" if content_type.startswith(("text/", "application/javascript", "application/manifest+json")) else ""
+        if candidate.name == "index.html":
+            html = candidate.read_text(encoding="utf-8")
+            version = web_version()
+            for asset in ("app.js", "i18n.js", "styles.css"):
+                html = html.replace('./%s"' % asset, './%s?v=%s"' % (asset, version))
+            self.send_bytes(200, html.encode("utf-8"), content_type + charset, {"Cache-Control": "private, no-store"})
+            return
+        if candidate.suffix in (".js", ".css"):
+            version = (parse_qs(parsed.query).get("v") or [""])[0]
+            if version and version == web_version():
+                self.send_bytes(200, candidate.read_bytes(), content_type + charset,
+                                {"Cache-Control": "private, max-age=31536000, immutable"})
+            else:
+                self.send_bytes(200, candidate.read_bytes(), content_type + charset,
+                                {"Cache-Control": "private, no-cache"})
+            return
         self.send_bytes(200, candidate.read_bytes(), content_type + charset)
 
     def do_POST(self):
@@ -1054,6 +1160,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.save_idea(body)
             elif path == "/api/ideas/vote":
                 self.vote_idea(body)
+            elif path == "/api/ideas/comment":
+                self.comment_idea(body)
+            elif path == "/api/ideas/plan":
+                self.set_idea_plan(body)
             elif path == "/api/ideas/delete":
                 self.delete_entry("ideas", body)
             elif path == "/api/trash/restore":
@@ -1461,6 +1571,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("回收站里找不到这条。")
             db["trash"] = [row for row in db["trash"] if row.get("trashId") != trash_id]
             save_db(db)
+        if entry.get("collection") == "ideas":
+            idea_id = (entry.get("item") or {}).get("id", "")
+            folder = IDEAMEDIA / idea_id
+            if idea_id and folder.exists():
+                for leftover in folder.glob("*"):
+                    leftover.unlink(missing_ok=True)
+                folder.rmdir()
         if entry.get("collection") == "labRecords":
             entry_id = (entry.get("item") or {}).get("id", "")
             target = LABDATA / entry_id
@@ -1752,10 +1869,36 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请写一句想法标题。")
             if not author:
                 raise ValueError("请填写你的名字，方便大家知道是谁提的。")
+        idea_id = str(uuid.uuid4())
+        saved_images = []
+        raw_images = body.get("images") or []
+        if isinstance(raw_images, list) and raw_images:
+            folder = IDEAMEDIA / idea_id
+            folder.mkdir(parents=True, exist_ok=True)
+            for entry in raw_images[:4]:
+                if not isinstance(entry, dict):
+                    continue
+                data_url = str(entry.get("data") or "")
+                match = re.match(r"^data:image/(png|jpeg|jpg|webp);base64,", data_url, re.IGNORECASE)
+                if not match:
+                    continue
+                try:
+                    payload = base64.b64decode(data_url[match.end():], validate=False)
+                except (ValueError, TypeError):
+                    continue
+                if not payload or len(payload) > 3 * 1024 * 1024:
+                    continue
+                suffix = ".jpg" if match.group(1).lower() in ("jpeg", "jpg") else "." + match.group(1).lower()
+                stored = uuid.uuid4().hex + suffix
+                (folder / stored).write_bytes(payload)
+                saved_images.append({"name": clean_text(entry.get("name"), 120) or stored, "storedName": stored, "bytes": len(payload)})
+            if not saved_images:
+                folder.rmdir()
         with LOCK:
             db = read_db()
             idea = {
-                "id": str(uuid.uuid4()),
+                "id": idea_id,
+                "images": saved_images,
                 "kind": kind,
                 "title": title,
                 "body": content,
@@ -1768,6 +1911,49 @@ class Handler(BaseHTTPRequestHandler):
             db.setdefault("ideas", []).insert(0, idea)
             save_db(db)
         self.send_json(200, {"idea": idea_view(idea)})
+
+    def comment_idea(self, body):
+        idea_id = clean_text(body.get("id"), 64)
+        person = clean_text(body.get("person"), 60) or "匿名"
+        text = clean_text(body.get("text"), 2000)
+        if not idea_id or not text:
+            raise ValueError("评论内容不能为空。")
+        with LOCK:
+            db = read_db()
+            idea = next((item for item in db.get("ideas", []) if item.get("id") == idea_id), None)
+            if not idea:
+                raise ValueError("找不到这条想法。")
+            comments = idea.get("comments")
+            if not isinstance(comments, list):
+                comments = []
+            comments.append({
+                "id": str(uuid.uuid4()),
+                "person": person,
+                "text": text,
+                "createdAt": now_iso(),
+            })
+            idea["comments"] = comments[-200:]
+            save_db(db)
+        self.send_json(200, {"ok": True, "comments": len(idea["comments"])})
+
+    def set_idea_plan(self, body):
+        idea_id = clean_text(body.get("id"), 64)
+        plan = clean_text(body.get("plan"), 6000)
+        if not idea_id:
+            raise ValueError("缺少想法编号。")
+        with LOCK:
+            db = read_db()
+            idea = next((item for item in db.get("ideas", []) if item.get("id") == idea_id), None)
+            if not idea:
+                raise ValueError("找不到这条想法。")
+            if plan:
+                idea["plan"] = plan
+                idea["planUpdatedAt"] = now_iso()
+            else:
+                idea.pop("plan", None)
+                idea.pop("planUpdatedAt", None)
+            save_db(db)
+        self.send_json(200, {"ok": True, "plan": idea.get("plan", "")})
 
     def vote_idea(self, body):
         idea_id = clean_text(body.get("id"), 64)
@@ -1917,7 +2103,7 @@ class LabHTTPServer(ThreadingHTTPServer):
 
 
 def main():
-    global TOKEN, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, STORAGE, UPLOADS, LIBRARY, LABDATA, DB_PATH
+    global TOKEN, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, STORAGE, UPLOADS, LIBRARY, LABDATA, IDEAMEDIA, DB_PATH
     global ASR_PYTHON, ASR_MODEL, ASR_READY, ASR_TIMEOUT
     global PDF_PYTHON, PDF_READY, PDF_TIMEOUT
     global LLM_FALLBACK_BASE_URL, LLM_FALLBACK_MODEL, LLM_FALLBACK_API_KEY
@@ -1931,6 +2117,7 @@ def main():
         UPLOADS = STORAGE / "uploads"
         LIBRARY = STORAGE / "library"
         LABDATA = STORAGE / "labdata"
+        IDEAMEDIA = STORAGE / "idea-media"
         DB_PATH = STORAGE / "state.json"
     STORAGE.mkdir(parents=True, exist_ok=True)
     token_source = "generated"
@@ -1964,6 +2151,13 @@ def main():
     LLM_BASE_URL = os.environ.get("LAB_LLM_BASE_URL", "").strip()
     LLM_MODEL = os.environ.get("LAB_LLM_MODEL", "").strip()
     LLM_API_KEY = os.environ.get("LAB_LLM_API_KEY", "").strip()
+    if not LLM_API_KEY:
+        key_path = os.environ.get("LAB_LLM_API_KEY_FILE", "").strip()
+        if key_path:
+            try:
+                LLM_API_KEY = Path(key_path).expanduser().read_text(encoding="utf-8").strip()
+            except OSError:
+                LLM_API_KEY = ""
     LLM_FALLBACK_BASE_URL = os.environ.get("LAB_LLM_FALLBACK_BASE_URL", "").strip()
     LLM_FALLBACK_MODEL = os.environ.get("LAB_LLM_FALLBACK_MODEL", "").strip()
     LLM_FALLBACK_API_KEY = os.environ.get("LAB_LLM_FALLBACK_API_KEY", "").strip()

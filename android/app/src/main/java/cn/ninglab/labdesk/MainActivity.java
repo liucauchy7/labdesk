@@ -131,6 +131,7 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         webSettings.setUserAgentString(webSettings.getUserAgentString() + " LabDeskApp/1.0");
         webView.addJavascriptInterface(new SpeechBridge(), "LabDeskSpeech");
+        webView.addJavascriptInterface(new VaultBridge(), "LabDeskVault");
         webView.setBackgroundColor(Color.rgb(245, 247, 244));
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -339,6 +340,25 @@ public class MainActivity extends Activity {
         boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (!granted) Toast.makeText(this, "未授予相机权限，可从文件中选择已有照片", Toast.LENGTH_LONG).show();
         launchFileChooser(pendingImageChooser, granted && pendingCameraCapture);
+    }
+
+    /** Persists the workspace access code in SharedPreferences so killing the
+     *  app (or a WebView storage wipe) never forces a re-login. */
+    public class VaultBridge {
+        @android.webkit.JavascriptInterface
+        public String loadCode() {
+            return preferences.getString("savedAccessCode", "");
+        }
+
+        @android.webkit.JavascriptInterface
+        public void saveCode(String code) {
+            preferences.edit().putString("savedAccessCode", code == null ? "" : code).apply();
+        }
+
+        @android.webkit.JavascriptInterface
+        public void clearCode() {
+            preferences.edit().remove("savedAccessCode").apply();
+        }
     }
 
     public class SpeechBridge {

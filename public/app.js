@@ -1,4 +1,4 @@
-const APP_VERSION = "1.3.6";
+const APP_VERSION = "1.4.5";
 
 const state = {
   route: "overview",
@@ -13,6 +13,10 @@ const state = {
   toastTimer: null,
   photoUrls: new Map(),
   photoRequests: new Map(),
+  photoThumbUrls: new Map(),
+  photoThumbRequests: new Map(),
+  literatureLoaded: false,
+  literatureRequest: null,
   collabTab: "literature",
   systemFilter: "all",
   litMethods: [],
@@ -20,6 +24,7 @@ const state = {
   litAdditives: [],
   litQuery: "",
   forumTab: "ideas",
+  pendingImages: [],
   litPage: 30,
   etag: "",
   litSearchFocus: false,
@@ -122,10 +127,43 @@ function setConnectionMode(isFilePreview) {
   document.getElementById("file-open-help").hidden = !isFilePreview;
 }
 
-function disconnect(message = "") {
+function vaultLoadCode() {
+  try {
+    if (window.LabDeskVault && typeof window.LabDeskVault.loadCode === "function") {
+      return window.LabDeskVault.loadCode() || "";
+    }
+  } catch (error) { /* bridge unavailable outside the Android app */ }
+  return "";
+}
+
+function vaultSaveCode(code) {
+  try {
+    if (window.LabDeskVault && typeof window.LabDeskVault.saveCode === "function") window.LabDeskVault.saveCode(code);
+  } catch (error) { /* ignore */ }
+}
+
+function vaultClearCode() {
+  try {
+    if (window.LabDeskVault && typeof window.LabDeskVault.clearCode === "function") window.LabDeskVault.clearCode();
+  } catch (error) { /* ignore */ }
+}
+
+function readSavedCode() {
+  const local = localStorage.getItem("labdesk.accessCode");
+  if (local) return local;
+  const vaulted = vaultLoadCode();
+  if (vaulted) localStorage.setItem("labdesk.accessCode", vaulted);
+  return vaulted;
+}
+
+function disconnect(message = "", keepSavedCode = false) {
   state.token = "";
   state.data = null;
-  localStorage.removeItem("labdesk.accessCode");
+  state.resumeInProgress = false;
+  if (!keepSavedCode) {
+    localStorage.removeItem("labdesk.accessCode");
+    vaultClearCode();
+  }
   modalRoot.innerHTML = "";
   setConnected(false);
   if (message) document.getElementById("connect-error").textContent = message;
@@ -134,6 +172,7 @@ function disconnect(message = "") {
 async function connect(code) {
   const error = document.getElementById("connect-error");
   error.textContent = "";
+  state.resumeInProgress = false;
   if (window.location.protocol === "file:") {
     setConnectionMode(true);
     return;
@@ -146,6 +185,7 @@ async function connect(code) {
     const response = await api("/api/state");
     state.data = await response.json();
     localStorage.setItem("labdesk.accessCode", state.token);
+    vaultSaveCode(state.token);
     setConnected(true);
     render();
   } catch (problem) {
@@ -160,6 +200,7 @@ async function connect(code) {
 
 async function resumeSession(code) {
   state.token = code;
+  state.resumeInProgress = true;
   setConnected(true);
   if (page && !page.innerHTML.trim()) {
     page.innerHTML = '<div class="page-loading">正在载入工作台…</div>';
@@ -170,15 +211,25 @@ async function resumeSession(code) {
     if (!response.ok) throw new Error("unavailable");
     state.etag = response.headers.get("ETag") || "";
     state.data = await response.json();
+    state.resumeAttempts = 0;
+    state.resumeInProgress = false;
     const hash = (location.hash || "").replace("#", "");
     if (["overview", "collab", "measure", "upkeep", "photos", "forum", "research"].includes(hash)) state.route = hash;
     render();
   } catch (problem) {
     if (problem.message === "unauthorized") {
+      state.resumeInProgress = false;
       disconnect("访问码无效或服务已重启，请重新连接。");
-    } else {
-      disconnect("连接不到课题组服务，请检查网络或稍后重试。");
+      return;
     }
+    const attempt = (state.resumeAttempts = (state.resumeAttempts || 0) + 1);
+    if (attempt <= 3) {
+      window.setTimeout(() => { if (state.resumeInProgress) resumeSession(code); }, [900, 2200, 4500][attempt - 1] || 4500);
+      return;
+    }
+    state.resumeAttempts = 0;
+    state.resumeInProgress = false;
+    disconnect("连接不到课题组服务。访问码已记住，网络恢复后会自动重连，也可以直接点「连接服务」。", true);
   }
 }
 
@@ -212,7 +263,7 @@ function updateNavigation() {
   const sectionName = names[state.route] || "总览";
   document.getElementById("topbar-section").textContent = (typeof labdeskTranslate === "function") ? labdeskTranslate(sectionName) : sectionName;
   document.querySelectorAll(".main-nav [data-route], .mobile-nav [data-route]").forEach((button) => button.classList.toggle("is-active", button.dataset.route === active));
-  const analysisCount = (state.data?.literature?.length || 0) + (state.data?.labRecords?.length || 0);
+  const analysisCount = (state.data?.literature?.length || state.data?.literatureCount || 0) + (state.data?.labRecords?.length || 0);
   document.querySelectorAll(".nav-count").forEach((badge) => { badge.textContent = analysisCount; });
   const ready = (state.data?.ideas || []).filter((idea) => idea.status === "approved" && !idea.done).length;
   const ideaBadge = document.getElementById("idea-count");
@@ -239,6 +290,7 @@ function render() {
   photoObserver?.disconnect();
   page.innerHTML = (views[state.route] || renderOverview)();
   if (typeof labdeskLocalize === "function") labdeskLocalize(page);
+  hydrateIdeaImages(page);
   if (state.litSearchFocus) {
     const search = document.getElementById("lit-search");
     if (search) {
@@ -468,7 +520,7 @@ function renderOverview() {
       <div class="ov-col">
         ${renderTopicsCard()}
         <section class="section-card section-card-pad">
-          <div class="card-heading"><div><h2>文献</h2><p>${data.literature.length} 条分析 · ${data.library.length} 份 PDF</p></div><button class="subtle-link" data-route="collab">打开 ${icon("arrow")}</button></div>
+          <div class="card-heading"><div><h2>文献</h2><p>${data.literature.length || data.literatureCount || 0} 条分析 · ${data.library.length} 份 PDF</p></div><button class="subtle-link" data-route="collab">打开 ${icon("arrow")}</button></div>
           <div class="supporting-action-list">
             <button class="supporting-action" data-route="collab"><span class="action-icon">${icon("book")}</span><span><strong>文献分析</strong><small>按体系筛选与检索</small></span>${icon("arrow")}</button>
             <button class="supporting-action" data-action="upload-pdf"><span class="action-icon">${icon("file")}</span><span><strong>上传 PDF</strong><small>原件保存在 Mac Mini</small></span>${icon("arrow")}</button>
@@ -537,7 +589,8 @@ function zoneCard(zone, kind) {
   const responsibility = assignees.length ? `负责人：${assignees.map(escapeHtml).join("、")}` : (zone.type === "device" ? "Super User 待登记" : "负责人待登记");
   return `<article class="catalog-item">
     <div class="catalog-item-top"><span class="catalog-icon ${categoryClass}">${icon(zone.type === "area" ? "broom" : "tool")}</span><div><span class="category-label">${escapeHtml(zone.group)} · ${escapeHtml(zone.category)}</span><h3>${escapeHtml(zone.name)}</h3><div class="catalog-item-sub">${responsibility}</div></div><span class="status-chip"><span class="server-dot"></span>${chipLabel}</span></div>
-    <div class="catalog-item-bottom"><span class="last-record">${recorded}</span><span class="item-record-count">${count} 条</span></div>
+    ${latest && recordPhotos(latest).length ? `<div class="record-photo-strip catalog-strip">${recordPhotos(latest).map((photoId, index) => `<button type="button" class="record-photo" data-photo-open="${escapeHtml(photoId)}" aria-label="查看第 ${index + 1} 张现场照片"><span class="record-thumb record-thumb-placeholder" data-photo-id="${escapeHtml(photoId)}">${icon("camera")}</span></button>`).join("")}</div>` : ""}
+    <button type="button" class="catalog-item-bottom catalog-item-bottom-button" data-open-zone-records="${kind}:${escapeHtml(zone.id)}"><span class="last-record">${recorded}</span><span class="item-record-count">${count} 条 · 查看记录</span></button>
     <div class="item-action"><span class="item-action-label">${latest ? `最近提交 ${formatDate(latest.createdAt, true)}` : ""}</span><button class="button button-secondary button-compact" data-open-record="${kind}" data-target="${escapeHtml(zone.id)}"><svg class="icon"><use href="#i-camera"></use></svg>${actionLabel}</button></div>
   </article>`;
 }
@@ -556,6 +609,71 @@ function recordRow(record) {
     <div class="record-photo-strip">${photos.map((photoId, index) => `<button class="record-photo" data-photo-open="${escapeHtml(photoId)}" aria-label="查看第 ${index + 1} 张现场照片"><span class="record-thumb record-thumb-placeholder" data-photo-id="${escapeHtml(photoId)}">${icon("camera")}</span></button>`).join("")}</div>
     <div class="record-copy"><strong>${escapeHtml(zone?.name || record.target)} · ${escapeHtml(record.person)}</strong><p><span class="record-kind-label ${legacyDeviceCleaning ? "is-unclassified" : ""}">${kindLabel}</span>${note}</p><div class="record-meta">${formatDate(record.createdAt, true)} · ${photos.length} 张照片</div></div>
   </article>`;
+}
+
+function openZoneRecords(kind, zoneId) {
+  const zone = (state.data?.zones || []).find((item) => item.id === zoneId);
+  const records = ((kind === "hygiene" ? state.data.hygieneRecords : state.data.maintenanceRecords) || [])
+    .filter((record) => record.target === zoneId)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  modal(zone ? `${zone.name} · 打卡记录` : "打卡记录", "按时间倒序显示该区域或仪器的全部打卡照片，点照片可放大。",
+    records.length ? `<div class="record-list">${records.map(recordRow).join("")}</div>` : `<p>还没有打卡记录。</p>`);
+  loadVisiblePhotos();
+}
+
+function checkinPeriodKey(value, mode) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  if (mode === "week") {
+    const monday = new Date(date);
+    monday.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+    return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+  }
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function checkinPeriods(mode, count) {
+  const now = new Date();
+  const periods = [];
+  for (let offset = count - 1; offset >= 0; offset -= 1) {
+    if (mode === "week") {
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7) - offset * 7);
+      periods.push({ key: checkinPeriodKey(monday, "week"), label: `${monday.getMonth() + 1}/${monday.getDate()}` });
+    } else {
+      const first = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      periods.push({ key: checkinPeriodKey(first, "month"), label: `${first.getMonth() + 1}月` });
+    }
+  }
+  return periods;
+}
+
+function renderCheckinBoard() {
+  const zones = state.data?.zones || [];
+  const blocks = [
+    { title: "公共区域", note: "每周至少打卡 1 次", mode: "week", count: 4, items: zones.filter((zone) => zone.type === "area"), records: state.data.hygieneRecords || [] },
+    { title: "仪器", note: "每月至少打卡 1 次", mode: "month", count: 3, items: zones.filter((zone) => zone.type === "device"), records: state.data.maintenanceRecords || [] },
+  ];
+  return `<section class="catalog-section"><div class="catalog-section-title"><h2>打卡一览</h2><span>公共区域每周一次 · 仪器每月一次</span></div>
+    <div class="checkin-board">${blocks.map((block) => {
+      const current = checkinPeriods(block.mode, 1)[0];
+      const rows = block.items.map((zone) => {
+        const mine = block.records.filter((record) => record.target === zone.id);
+        const done = mine.some((record) => checkinPeriodKey(record.createdAt, block.mode) === current.key);
+        const last = mine.map((record) => record.createdAt).sort().pop() || "";
+        const owner = (zone.assignees || []).join("、") || (zone.type === "device" ? "Super User 待登记" : "负责人待登记");
+        return `<div class="checkin-row ${done ? "" : "is-due"}">
+          <span class="checkin-name">${escapeHtml(zone.name)}<small>${escapeHtml(owner)}</small></span>
+          <span class="checkin-state ${done ? "is-ok" : ""}">${done ? "本期已打卡" : "本期待打卡"}</span>
+          <span class="checkin-last">${last ? `上次 ${formatDate(last, true)}` : "从未打卡"}</span>
+        </div>`;
+      }).join("");
+      return `<div class="checkin-block"><div class="checkin-block-head"><h3>${block.title}</h3><span>${block.note}</span></div>
+        <div class="checkin-table">
+          <div class="checkin-row checkin-head"><span class="checkin-name">名称 / 负责人</span><span class="checkin-state">本期</span><span class="checkin-last">上次打卡</span></div>
+          ${rows || `<div class="checkin-empty">暂无项目</div>`}
+        </div></div>`;
+    }).join("")}</div></section>`;
 }
 
 function renderRecordHistory(records, label) {
@@ -582,6 +700,7 @@ function renderUpkeep() {
   const action = `<button class="button button-primary" data-action="new-upkeep">${icon("camera")}拍照记录</button>`;
   return `${pageHead("卫生与仪器", "公共区域值日与仪器维护在同一页记录，按负责人和 Super User 查看", action)}
     <div class="filter-bar"><div class="filter-options">${categories.map((filter) => `<button class="filter-button ${state.hygieneFilter === filter ? "is-active" : ""}" data-hygiene-filter="${escapeHtml(filter)}">${escapeHtml(filter)}</button>`).join("")}</div><label class="assignee-filter"><span>负责人</span><select id="hygiene-assignee-filter"><option value="全部" ${state.hygieneAssignee === "全部" ? "selected" : ""}>全部负责人</option>${assignees.map((name) => `<option value="${escapeHtml(name)}" ${state.hygieneAssignee === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select></label><span class="filter-spacer"></span><span class="muted-count">${displayed.length} 个区域 · ${visibleDevices.length} 台仪器 · ${merged.length} 条记录</span></div>
+    ${renderCheckinBoard()}
     <section class="catalog-section"><div class="catalog-section-title"><h2>公共区域值日</h2><span>${hygieneRecords.length} 条卫生照片</span></div>
       ${displayed.length ? `<div class="item-grid">${displayed.map((zone) => zoneCard(zone, "hygiene")).join("")}</div>` : `<div class="section-card empty-state"><span class="empty-icon">${icon("broom")}</span><strong>没有找到负责区域</strong><p>当前筛选下没有匹配项目。</p></div>`}
     </section>
@@ -1135,8 +1254,33 @@ function literatureStats(items, matched) {
   </details>`;
 }
 
+function ensureLiterature(force = false) {
+  if (state.literatureLoaded && !force) return Promise.resolve();
+  if (state.literatureRequest) return state.literatureRequest;
+  state.literatureRequest = api("/api/literature")
+    .then((response) => response.json())
+    .then((payload) => {
+      if (state.data) state.data.literature = payload.literature || [];
+      state.literatureLoaded = true;
+    })
+    .finally(() => { state.literatureRequest = null; });
+  return state.literatureRequest;
+}
+
+async function refreshAfterLiteratureChange() {
+  await reloadState();
+  await ensureLiterature(true);
+  render();
+}
+
 function renderCollab() {
   const tab = state.collabTab || "literature";
+  if (tab === "literature" && !state.literatureLoaded) {
+    ensureLiterature()
+      .then(() => { if (state.route === "collab") render(); })
+      .catch(() => showToast("文献加载失败，请稍后重试。"));
+    return `${pageHead("协作中心", "文献加载中…", "")}<div class="section-card empty-state"><span class="empty-icon">${icon("book")}</span><strong>文献加载中…</strong><p>七百多条文献分析改为按需加载，只下载一次，之后驻留内存。</p></div>`;
+  }
   const filter = state.systemFilter || "all";
   const scoped = (state.data?.literature || [])
     .filter((item) => filter === "all" || item.system === filter)
@@ -1153,7 +1297,7 @@ function renderCollab() {
   const action = `<button class="button button-secondary" data-route="research">${icon("file")}PDF 资料库</button><button class="button button-primary" data-action="${tab === "literature" ? "add-literature" : "new-measure"}">${icon("plus")}${tab === "literature" ? "添加文献分析" : "记录实验进展"}</button>`;
   return `${pageHead("协作平台", "文献分析与实验室进展分开管理，都按材料方向归档", action)}
     <div class="collab-tabs" role="tablist">
-      <button class="collab-tab ${tab === "literature" ? "is-active" : ""}" data-collab-tab="literature" role="tab">${icon("book")}文献协作分析平台<span>${(state.data?.literature || []).length}</span></button>
+      <button class="collab-tab ${tab === "literature" ? "is-active" : ""}" data-collab-tab="literature" role="tab">${icon("book")}文献协作分析平台<span>${(state.data?.literature || []).length || state.data?.literatureCount || 0}</span></button>
       <button class="collab-tab ${tab === "lab" ? "is-active" : ""}" data-collab-tab="lab" role="tab">${icon("spark")}实验室进展协作平台<span>${(state.data?.labRecords || []).length}</span></button>
     </div>
     <div class="filter-bar"><div class="filter-options">${filters.map((item) => `<button class="filter-button ${filter === item.id ? "is-active" : ""}" data-system-filter="${item.id}">${escapeHtml(item.name)}</button>`).join("")}</div><span class="filter-spacer"></span><span class="muted-count">${tab === "literature" ? (tagFiltered ? `${literature.length} / ${scoped.length} 条文献分析` : `${literature.length} 条文献分析`) : `${labRecords.length} 条实验进展`}</span></div>
@@ -1201,7 +1345,7 @@ function ideaProgress(idea) {
   if (idea.status === "approved") return "已达到实施条件，等待排期";
   const created = new Date(idea.createdAt);
   const hours = Number.isNaN(created.getTime()) ? 0 : (Date.now() - created.getTime()) / 36e5;
-  const left = Math.max(0, 48 - hours);
+  const left = Math.max(0, 24 - hours);
   const down = idea.downvoteCount || 0;
   if (down > 0) return `还有 ${down} 人反对，先讨论清楚再推进（需 ${Math.max(0, 5 - ups)} 个赞）`;
   return `还差 ${Math.max(0, 5 - ups)} 个赞，或 ${Math.ceil(left)} 小时后无人反对自动通过`;
@@ -1215,6 +1359,18 @@ function ideaCard(idea) {
     <div class="idea-head">${ideaStatusBadge(idea)}<span class="idea-meta">${escapeHtml(idea.author || "匿名")} · ${ideaAgeText(idea.createdAt)}</span></div>
     <h3>${escapeHtml(idea.title)}</h3>
     ${idea.body ? `<p class="idea-body">${escapeHtml(idea.body)}</p>` : ""}
+    ${(idea.images || []).length ? `<div class="idea-images">${idea.images.map((image) => `<button type="button" class="idea-thumb" data-idea-image="${escapeHtml(image.url)}" data-idea-image-name="${escapeHtml(image.name || "")}">${icon("images")}</button>`).join("")}</div>` : ""}
+    ${idea.plan ? `<div class="idea-plan"><strong>${icon("check")}采纳方案</strong><p>${escapeHtml(idea.plan)}</p></div>` : ""}
+    <details class="idea-discuss" data-discuss="${escapeHtml(idea.id)}">
+      <summary>讨论补充（${(idea.comments || []).length}）</summary>
+      <div class="idea-comment-list">${(idea.comments || []).length ? (idea.comments || []).map((comment) => `<p><strong>${escapeHtml(comment.person || "匿名")}</strong><span>${ideaAgeText(comment.createdAt)}</span>${escapeHtml(comment.text)}</p>`).join("") : `<p class="idea-comment-empty">还没有讨论，补充你的意见吧。</p>`}</div>
+      <div class="idea-comment-form">
+        <input maxlength="60" placeholder="你的名字" value="${escapeHtml(localStorage.getItem("labdesk.personName") || "")}" data-comment-person="${escapeHtml(idea.id)}">
+        <input maxlength="500" placeholder="补充意见或修改建议…" data-comment-text="${escapeHtml(idea.id)}">
+        <button type="button" class="button button-secondary button-compact" data-comment-submit="${escapeHtml(idea.id)}">发表</button>
+        <button type="button" class="button button-secondary button-compact" data-consolidate="${escapeHtml(idea.id)}">整合讨论为采纳方案</button>
+      </div>
+    </details>
     <div class="idea-foot">
       <button type="button" class="idea-vote ${votedUp ? "is-up" : ""}" data-vote-idea="${escapeHtml(idea.id)}" data-idea-direction="up" aria-pressed="${votedUp}" title="支持这个想法">${icon("check")}<span>支持</span><strong>${idea.upvoteCount || 0}</strong></button>
       <button type="button" class="idea-vote ${votedDown ? "is-down" : ""}" data-vote-idea="${escapeHtml(idea.id)}" data-idea-direction="down" aria-pressed="${votedDown}" title="反对或需要再讨论">${icon("close")}<span>反对</span><strong>${idea.downvoteCount || 0}</strong></button>
@@ -1225,16 +1381,88 @@ function ideaCard(idea) {
   </article>`;
 }
 
+async function submitIdeaComment(ideaId) {
+  const personInput = document.querySelector(`[data-comment-person="${CSS.escape(ideaId)}"]`);
+  const textInput = document.querySelector(`[data-comment-text="${CSS.escape(ideaId)}"]`);
+  const text = (textInput?.value || "").trim();
+  if (!text) {
+    showToast("先写点补充意见吧。");
+    return;
+  }
+  const person = (personInput?.value || "").trim() || localStorage.getItem("labdesk.personName") || "匿名";
+  try {
+    await api("/api/ideas/comment", { method: "POST", body: JSON.stringify({ id: ideaId, person, text }) });
+    if (person !== "匿名") localStorage.setItem("labdesk.personName", person);
+    await reloadState();
+    const details = document.querySelector(`[data-discuss="${CSS.escape(ideaId)}"]`);
+    if (details) details.open = true;
+    showToast("讨论已补充");
+  } catch (problem) {
+    showToast(problem.message);
+  }
+}
+
+function openConsolidateDialog(ideaId) {
+  const idea = (state.data?.ideas || []).find((item) => item.id === ideaId);
+  if (!idea) return;
+  const comments = idea.comments || [];
+  if (!comments.length && !idea.plan) {
+    showToast("还没有讨论内容，先补充意见再整合。");
+    return;
+  }
+  const merged = `${idea.plan ? idea.plan + "\n\n" : ""}${comments.map((comment) => `· ${comment.person || "匿名"}：${comment.text}`).join("\n")}`;
+  modal("整合讨论方案", "把讨论要点整合成最终采纳的修改方案，保存后展示在想法卡片上。",
+    `<div class="field"><label for="consolidate-plan">采纳方案</label><textarea id="consolidate-plan" rows="10" maxlength="6000">${escapeHtml(merged)}</textarea><span class="field-help">可直接编辑：删掉无关讨论、合并重复意见，形成可执行的最终方案。</span></div>`,
+    `<button class="button button-secondary" data-close-modal type="button">取消</button><button class="button button-primary" id="save-plan" type="button">保存为采纳方案 ${icon("check")}</button>`, true);
+  document.getElementById("save-plan").addEventListener("click", async () => {
+    const plan = document.getElementById("consolidate-plan").value.trim();
+    try {
+      await api("/api/ideas/plan", { method: "POST", body: JSON.stringify({ id: ideaId, plan }) });
+      closeModal();
+      await reloadState();
+      showToast("已保存采纳方案");
+    } catch (problem) {
+      showToast(problem.message);
+    }
+  });
+}
+
 function rantCard(rant) {
   const voted = (rant.upvotes || []).includes(voterId());
   return `<article class="rant-card">
     <p class="rant-body">${escapeHtml(rant.body || rant.title)}</p>
+    ${(rant.images || []).length ? `<div class="idea-images">${rant.images.map((image) => `<button type="button" class="idea-thumb" data-idea-image="${escapeHtml(image.url)}" data-idea-image-name="${escapeHtml(image.name || "")}">${icon("images")}</button>`).join("")}</div>` : ""}
     <div class="rant-foot">
       <span class="rant-time">${ideaAgeText(rant.createdAt)}</span>
       <button type="button" class="idea-vote ${voted ? "is-up" : ""}" data-vote-idea="${escapeHtml(rant.id)}" data-idea-direction="up" aria-pressed="${voted}">${icon("check")}<span>同感</span><strong>${rant.upvoteCount || 0}</strong></button>
       <button type="button" class="subtle-link danger" data-action="delete-idea" data-id="${escapeHtml(rant.id)}">删除</button>
     </div>
   </article>`;
+}
+
+async function hydrateIdeaImages(root) {
+  const buttons = [...root.querySelectorAll("[data-idea-image]")];
+  for (const button of buttons) {
+    if (button.dataset.loaded) continue;
+    button.dataset.loaded = "1";
+    try {
+      const response = await api(button.dataset.ideaImage);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      button.style.backgroundImage = `url("${objectUrl}")`;
+      button.dataset.objectUrl = objectUrl;
+    } catch (error) {
+      button.classList.add("is-error");
+    }
+  }
+}
+
+function openIdeaImage(button) {
+  const url = button.dataset.objectUrl;
+  if (!url) return;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-close-modal><section class="modal modal-wide image-modal" role="dialog" aria-modal="true">
+    <div class="modal-head"><div><h2>${escapeHtml(button.dataset.ideaImageName || "图片")}</h2></div><button class="modal-close" data-close-modal aria-label="关闭">${icon("close")}</button></div>
+    <div class="modal-body"><img class="image-preview" src="${url}" alt=""></div></section></div>`;
 }
 
 function openWorkshop(url, title) {
@@ -1320,11 +1548,21 @@ function renderForum() {
 
 function rantDialog() {
   const content = `<form class="form-grid" id="rant-form">
+    <div class="field"><label for="idea-images">配图（可选，最多 4 张）</label><input id="idea-images" type="file" accept="image/*" multiple><div class="idea-image-preview" id="idea-image-preview"></div></div>
     <div class="field"><label for="rant-body">想吐槽什么</label><textarea id="rant-body" maxlength="800" rows="4" required placeholder="例如：五号楼台面总是堆满样品，没人清理；或者通风橱灯坏了很久"></textarea><span class="field-help">完全匿名，不记录姓名。</span></div>
     <p class="inline-alert" id="rant-error" role="alert"></p>
   </form>`;
   const buttons = `<button class="button button-secondary" data-close-modal type="button">取消</button><button class="button button-primary" id="save-rant" type="button">匿名发布 ${icon("check")}</button>`;
   modal("匿名吐槽", "只记录内容，不记录是谁说的。", content, buttons);
+  state.pendingImages = [];
+  renderIdeaImagePicker();
+  document.getElementById("idea-images").addEventListener("change", handleIdeaImages);
+  document.getElementById("idea-image-preview").addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-remove-image]");
+    if (!remove) return;
+    state.pendingImages.splice(Number(remove.dataset.removeImage), 1);
+    renderIdeaImagePicker();
+  });
   document.getElementById("save-rant").addEventListener("click", saveRant);
 }
 
@@ -1339,6 +1577,7 @@ async function saveRant(event) {
     await api("/api/ideas", { method: "POST", body: JSON.stringify({
       kind: "rant",
       body: document.getElementById("rant-body").value.trim(),
+      images: (state.pendingImages || []).map((image) => ({ name: image.name, data: image.data })),
     }) });
     closeModal();
     state.forumTab = "rants";
@@ -1356,11 +1595,21 @@ function ideaDialog() {
   const content = `<form class="form-grid" id="idea-form">
     <div class="field"><label for="idea-title">想法标题</label><input id="idea-title" maxlength="120" required placeholder="例如：测量记录支持直接拖拽多个 CSV"></div>
     <div class="field"><label for="idea-body">具体说明（可选）</label><textarea id="idea-body" maxlength="2000" rows="4" placeholder="现在哪里不方便、希望变成什么样、有什么例子"></textarea></div>
+    <div class="field"><label for="idea-images">配图（可选，最多 4 张）</label><input id="idea-images" type="file" accept="image/*" multiple><div class="idea-image-preview" id="idea-image-preview"></div></div>
     <div class="field"><label for="idea-author">你的名字</label><input id="idea-author" maxlength="60" required value="${escapeHtml(author)}" placeholder="方便大家知道是谁提的"></div>
     <p class="inline-alert" id="idea-error" role="alert"></p>
   </form>`;
   const buttons = `<button class="button button-secondary" data-close-modal type="button">取消</button><button class="button button-primary" id="save-idea" type="button">发布 ${icon("check")}</button>`;
   modal("提个想法", "发布后其他人可以点赞或反对，达到条件就会进入实施清单。", content, buttons);
+  state.pendingImages = [];
+  renderIdeaImagePicker();
+  document.getElementById("idea-images").addEventListener("change", handleIdeaImages);
+  document.getElementById("idea-image-preview").addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-remove-image]");
+    if (!remove) return;
+    state.pendingImages.splice(Number(remove.dataset.removeImage), 1);
+    renderIdeaImagePicker();
+  });
   document.getElementById("save-idea").addEventListener("click", saveIdea);
 }
 
@@ -1377,6 +1626,7 @@ async function saveIdea(event) {
       title: document.getElementById("idea-title").value.trim(),
       body: document.getElementById("idea-body").value.trim(),
       author,
+      images: (state.pendingImages || []).map((image) => ({ name: image.name, data: image.data })),
     }) });
     localStorage.setItem("labdesk.personName", author);
     closeModal();
@@ -2020,7 +2270,7 @@ async function saveLiterature(event, itemId) {
       person: localStorage.getItem("labdesk.personName") || "",
     }) });
     closeModal();
-    await reloadState();
+    await refreshAfterLiteratureChange();
     showToast("文献分析已保存");
   } catch (problem) {
     error.textContent = problem.message;
@@ -2142,6 +2392,7 @@ function recordDialog(kind, targetId = "") {
   const fileInput = document.getElementById("record-photo");
   state.preparedRecordPhoto = null;
   state.preparedRecordPhotos = [];
+  state.previewUrls = [];
   fileInput.addEventListener("change", async () => {
     const files = [...(fileInput.files || [])];
     const error = document.getElementById("record-error");
@@ -2171,10 +2422,12 @@ function recordDialog(kind, targetId = "") {
       }
       state.preparedRecordPhotos = prepared;
       state.preparedRecordPhoto = prepared[0];
+      state.previewUrls = prepared.map((file) => URL.createObjectURL(file));
       prepared.forEach((file, index) => {
         const image = document.createElement("img");
-        image.src = URL.createObjectURL(file);
+        image.src = state.previewUrls[index];
         image.alt = `照片预览 ${index + 1}`;
+        image.dataset.previewOpen = String(index);
         previewGrid.append(image);
       });
       const sizeLabel = document.getElementById("photo-size-label");
@@ -2184,6 +2437,54 @@ function recordDialog(kind, targetId = "") {
     }
   });
   document.getElementById("save-record").addEventListener("click", saveRecord);
+}
+
+function compressImageFile(file, maxSize = 1600, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      image.onerror = () => reject(new Error("图片读取失败"));
+      image.src = String(reader.result || "");
+    };
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderIdeaImagePicker() {
+  const box = document.getElementById("idea-image-preview");
+  if (!box) return;
+  box.innerHTML = (state.pendingImages || []).map((item, index) => `
+    <span class="pending-image"><img src="${item.data}" alt=""><button type="button" data-remove-image="${index}" aria-label="移除">×</button></span>`).join("");
+}
+
+async function handleIdeaImages(event) {
+  const files = [...(event.currentTarget.files || [])];
+  if (!files.length) return;
+  const room = 4 - (state.pendingImages || []).length;
+  if (room <= 0) { showToast("最多 4 张图片"); event.currentTarget.value = ""; return; }
+  const chosen = files.slice(0, room);
+  try {
+    const compressed = await Promise.all(chosen.map(async (file) => ({
+      name: file.name,
+      data: await compressImageFile(file),
+    })));
+    state.pendingImages = [...(state.pendingImages || []), ...compressed];
+    renderIdeaImagePicker();
+  } catch (problem) {
+    showToast(problem.message || "图片处理失败");
+  } finally {
+    event.currentTarget.value = "";
+  }
 }
 
 async function toDataUrl(file) {
@@ -2356,28 +2657,47 @@ async function openPdf(itemId) {
   }
 }
 
-async function ensurePhoto(id) {
-  if (state.photoUrls.has(id)) return state.photoUrls.get(id);
-  if (!state.photoRequests.has(id)) {
-    const request = api(`/api/media/${encodeURIComponent(id)}`)
+function photoThumbName(id) {
+  return id.replace(/\.(?:jpg|png|webp)$/i, ".thumb.jpg");
+}
+
+async function ensurePhoto(id, thumb = false) {
+  const cache = thumb ? state.photoThumbUrls : state.photoUrls;
+  const pending = thumb ? state.photoThumbRequests : state.photoRequests;
+  if (cache.has(id)) return cache.get(id);
+  if (!pending.has(id)) {
+    const target = thumb ? photoThumbName(id) : id;
+    const request = api(`/api/media/${encodeURIComponent(target)}`)
       .then(async (response) => {
+        if (!response.ok) throw new Error("photo missing");
         const url = URL.createObjectURL(await response.blob());
-        state.photoUrls.set(id, url);
+        cache.set(id, url);
         return url;
       })
-      .finally(() => state.photoRequests.delete(id));
-    state.photoRequests.set(id, request);
+      .finally(() => pending.delete(id));
+    pending.set(id, request);
   }
-  return state.photoRequests.get(id);
+  return pending.get(id);
+}
+
+async function ensurePhotoWithFallback(id) {
+  try {
+    return await ensurePhoto(id, true);
+  } catch (error) {
+    return ensurePhoto(id, false);
+  }
 }
 
 function displayPhoto(id, url) {
-  page.querySelectorAll(`[data-photo-id="${CSS.escape(id)}"]`).forEach((element) => {
-    if (element.tagName.toLowerCase() === "img") element.src = url;
-    else {
-      element.classList.remove("record-thumb-placeholder");
-      element.innerHTML = `<img class="record-thumb" src="${url}" alt="现场照片" data-photo-display="${escapeHtml(id)}">`;
-    }
+  [page, modalRoot].forEach((root) => {
+    if (!root) return;
+    root.querySelectorAll(`[data-photo-id="${CSS.escape(id)}"]`).forEach((element) => {
+      if (element.tagName.toLowerCase() === "img") element.src = url;
+      else {
+        element.classList.remove("record-thumb-placeholder");
+        element.innerHTML = `<img class="record-thumb" src="${url}" alt="现场照片" data-photo-display="${escapeHtml(id)}">`;
+      }
+    });
   });
 }
 
@@ -2387,31 +2707,57 @@ const photoObserver = "IntersectionObserver" in window
       if (!entry.isIntersecting) return;
       observer.unobserve(entry.target);
       const id = entry.target.dataset.photoId;
-      ensurePhoto(id).then((url) => displayPhoto(id, url)).catch(() => { entry.target.title = "照片暂时无法加载，请刷新后重试"; });
+      ensurePhotoWithFallback(id).then((url) => displayPhoto(id, url)).catch(() => { entry.target.title = "照片暂时无法加载，请刷新后重试"; });
     });
   }, { rootMargin: "160px" })
   : null;
 
 function loadVisiblePhotos() {
-  page.querySelectorAll("[data-photo-id]").forEach((element) => {
+  const roots = [page, modalRoot].filter(Boolean);
+  roots.forEach((root) => root.querySelectorAll("[data-photo-id]").forEach((element) => {
     const id = element.dataset.photoId;
     if (!id || element.dataset.photoLoaded === "true") return;
     element.dataset.photoLoaded = "true";
     if (photoObserver) photoObserver.observe(element);
-    else ensurePhoto(id).then((url) => displayPhoto(id, url)).catch(() => { element.title = "照片暂时无法加载，请刷新后重试"; });
-  });
+    else ensurePhotoWithFallback(id).then((url) => displayPhoto(id, url)).catch(() => { element.title = "照片暂时无法加载，请刷新后重试"; });
+  }));
+}
+
+function openLightboxUrl(url, label = "现场记录照片") {
+  modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><img class="lightbox-image" src="${url}" alt="${escapeHtml(label)}"></div>`;
+}
+
+function upgradeLightbox(id) {
+  ensurePhoto(id, false).then((url) => {
+    const backdrop = modalRoot.querySelector(`[data-lightbox-id="${CSS.escape(id)}"]`);
+    if (!backdrop) return;
+    const image = backdrop.querySelector("img");
+    if (image) {
+      image.classList.remove("is-thumb");
+      image.src = url;
+    }
+  }).catch(() => { /* keep the quick preview */ });
 }
 
 function showPhoto(id) {
-  const url = state.photoUrls.get(id);
-  if (!url) {
-    ensurePhoto(id).then((loadedUrl) => {
-      displayPhoto(id, loadedUrl);
-      showPhoto(id);
-    }).catch(() => showToast("照片暂时无法加载，请检查网络后刷新重试。"));
-    return;
-  }
-  modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><img class="lightbox-image" src="${url}" alt="现场记录照片"></div>`;
+  const full = state.photoUrls.get(id);
+  const quick = state.photoThumbUrls.get(id);
+  const openWith = (url, isFull) => {
+    modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal data-lightbox-id="${escapeHtml(id)}"><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><img class="lightbox-image ${isFull ? "" : "is-thumb"}" src="${url}" alt="现场记录照片"></div>`;
+    displayPhoto(id, url);
+    if (!isFull) upgradeLightbox(id);
+  };
+  if (full) { openWith(full, true); return; }
+  if (quick) { openWith(quick, false); return; }
+  modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal data-lightbox-id="${escapeHtml(id)}"><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><div class="lightbox-loading">照片加载中…</div></div>`;
+  ensurePhotoWithFallback(id).then((loadedUrl) => {
+    if (!modalRoot.querySelector(".lightbox-loading")) return;
+    const isThumb = !state.photoUrls.has(id);
+    openWith(loadedUrl, !isThumb);
+  }).catch(() => {
+    if (modalRoot.querySelector(".lightbox-loading")) closeModal();
+    showToast("照片暂时无法加载，请检查网络后重试。");
+  });
 }
 
 async function askAssistant(event) {
@@ -2480,12 +2826,22 @@ document.addEventListener("click", (event) => {
     const id = translateButton.dataset.translateLit;
     translateButton.textContent = "翻译中…";
     api("/api/literature/translate", { method: "POST", body: JSON.stringify({ id }) })
-      .then(() => reloadState())
+      .then(() => refreshAfterLiteratureChange())
       .catch((problem) => { showToast(problem.message); translateButton.textContent = "翻译为英文"; });
     return;
   }
   const voteButton = event.target.closest("[data-vote-idea]");
   if (voteButton) { voteIdea(voteButton.dataset.voteIdea, voteButton.dataset.ideaDirection); return; }
+  const commentButton = event.target.closest("[data-comment-submit]");
+  if (commentButton) { submitIdeaComment(commentButton.dataset.commentSubmit); return; }
+  const consolidateButton = event.target.closest("[data-consolidate]");
+  if (consolidateButton) { openConsolidateDialog(consolidateButton.dataset.consolidate); return; }
+  const zoneRecordsButton = event.target.closest("[data-open-zone-records]");
+  if (zoneRecordsButton) {
+    const [recordKind, zoneId] = zoneRecordsButton.dataset.openZoneRecords.split(":");
+    openZoneRecords(recordKind, zoneId);
+    return;
+  }
   const doneButton = event.target.closest("[data-idea-done]");
   if (doneButton) {
     const idea = (state.data?.ideas || []).find((item) => item.id === doneButton.dataset.ideaDone);
@@ -2513,7 +2869,7 @@ document.addEventListener("click", (event) => {
     const itemId = event.target.closest("[data-action]").dataset.id;
     if (window.confirm("删除这条文献分析？") && itemId) {
       api("/api/literature/delete", { method: "POST", body: JSON.stringify({ id: itemId }) })
-        .then(() => reloadState()).then(() => showToast("已删除文献分析"))
+        .then(() => refreshAfterLiteratureChange()).then(() => showToast("已删除文献分析"))
         .catch((problem) => showToast(problem.message));
     }
     return;
@@ -2544,6 +2900,8 @@ document.addEventListener("click", (event) => {
       .catch((problem) => showToast(problem.message));
     return;
   }
+  const ideaThumb = event.target.closest("[data-idea-image]");
+  if (ideaThumb) { openIdeaImage(ideaThumb); return; }
   const openWorkshopButton = event.target.closest("[data-open-workshop]");
   if (openWorkshopButton) {
     openWorkshop(openWorkshopButton.dataset.openWorkshop, openWorkshopButton.dataset.workshopTitle);
@@ -2595,6 +2953,11 @@ document.addEventListener("click", (event) => {
   if (filter) { state.hygieneFilter = filter.dataset.hygieneFilter; render(); return; }
   const photoFilter = event.target.closest("[data-photo-filter]");
   if (photoFilter) { state.photoFilter = photoFilter.dataset.photoFilter; state.photoPageSize = 12; render(); return; }
+  const preview = event.target.closest("[data-preview-open]");
+  if (preview && Array.isArray(state.previewUrls)) {
+    const previewUrl = state.previewUrls[Number(preview.dataset.previewOpen)];
+    if (previewUrl) { openLightboxUrl(previewUrl, "上传前预览"); return; }
+  }
   const photo = event.target.closest("[data-photo-open]");
   if (photo) { showPhoto(photo.dataset.photoOpen); return; }
   const thumb = event.target.closest("[data-photo-id]");
@@ -2703,8 +3066,19 @@ const isFilePreview = window.location.protocol === "file:";
 if (document.body && /LabDeskApp\//.test(navigator.userAgent)) document.body.classList.add("in-app");
 setConnectionMode(isFilePreview);
 if (!isFilePreview) {
-  const savedCode = localStorage.getItem("labdesk.accessCode");
-  if (savedCode) resumeSession(savedCode);
+  const savedCode = readSavedCode();
+  if (savedCode) {
+    const codeInput = document.getElementById("access-code");
+    if (codeInput && !codeInput.value) codeInput.value = savedCode;
+    resumeSession(savedCode);
+    const retrySavedSession = () => {
+      if (shell.hidden && !state.resumeInProgress && readSavedCode()) resumeSession(savedCode);
+    };
+    window.addEventListener("online", retrySavedSession);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) retrySavedSession();
+    });
+  }
   window.setTimeout(checkForUpdate, 1200);
   window.setInterval(checkForUpdate, 60 * 1000);
   document.addEventListener("visibilitychange", () => {
