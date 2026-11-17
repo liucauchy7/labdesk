@@ -29,7 +29,7 @@
 * { box-sizing: border-box; }
 html, body { min-width: 320px; min-height: 100%; margin: 0; }
 html { -webkit-tap-highlight-color: transparent; }
-body { background: var(--paper); font-size: 14px; line-height: 1.5; overscroll-behavior-y: none; }
+body { background: var(--paper); font-size: 14px; line-height: 1.5; }
 button, input, textarea { font: inherit; }
 button { color: inherit; }
 button:disabled { opacity: 0.55; cursor: not-allowed; }

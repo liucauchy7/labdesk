@@ -1,4 +1,4 @@
-const APP_VERSION = "1.4.6";
+const APP_VERSION = "1.4.7";
 
 const state = {
   route: "overview",
@@ -17,6 +17,7 @@ const state = {
   photoThumbRequests: new Map(),
   literatureLoaded: false,
   literatureRequest: null,
+  literatureFailed: false,
   collabTab: "literature",
   systemFilter: "all",
   litMethods: [],
@@ -160,6 +161,9 @@ function disconnect(message = "", keepSavedCode = false) {
   state.token = "";
   state.data = null;
   state.resumeInProgress = false;
+  state.literatureLoaded = false;
+  state.literatureRequest = null;
+  state.literatureFailed = false;
   if (!keepSavedCode) {
     localStorage.removeItem("labdesk.accessCode");
     vaultClearCode();
@@ -188,6 +192,7 @@ async function connect(code) {
     vaultSaveCode(state.token);
     setConnected(true);
     render();
+    ensureLiterature().catch(() => {});
   } catch (problem) {
     state.token = "";
     if (problem.message !== "访问码无效。") error.textContent = problem.message;
@@ -216,6 +221,7 @@ async function resumeSession(code) {
     const hash = (location.hash || "").replace("#", "");
     if (["overview", "collab", "measure", "upkeep", "photos", "forum", "research"].includes(hash)) state.route = hash;
     render();
+    ensureLiterature().catch(() => {});
   } catch (problem) {
     if (problem.message === "unauthorized") {
       state.resumeInProgress = false;
@@ -246,7 +252,9 @@ async function reloadState() {
   if (response.status === 304) { render(); return; }
   if (!response.ok) throw new Error("刷新失败，请稍后重试。");
   state.etag = response.headers.get("ETag") || "";
+  const loadedLiterature = state.literatureLoaded ? state.data?.literature : null;
   state.data = await response.json();
+  if (loadedLiterature?.length && !(state.data.literature || []).length) state.data.literature = loadedLiterature;
   render();
 }
 
@@ -1257,12 +1265,15 @@ function literatureStats(items, matched) {
 function ensureLiterature(force = false) {
   if (state.literatureLoaded && !force) return Promise.resolve();
   if (state.literatureRequest) return state.literatureRequest;
+  state.literatureFailed = false;
   state.literatureRequest = api("/api/literature")
     .then((response) => response.json())
     .then((payload) => {
-      if (state.data) state.data.literature = payload.literature || [];
+      if (!state.data) return;
+      state.data.literature = payload.literature || [];
       state.literatureLoaded = true;
     })
+    .catch((problem) => { state.literatureFailed = true; throw problem; })
     .finally(() => { state.literatureRequest = null; });
   return state.literatureRequest;
 }
@@ -1276,10 +1287,15 @@ async function refreshAfterLiteratureChange() {
 function renderCollab() {
   const tab = state.collabTab || "literature";
   if (tab === "literature" && !state.literatureLoaded) {
-    ensureLiterature()
-      .then(() => { if (state.route === "collab") render(); })
-      .catch(() => showToast("文献加载失败，请稍后重试。"));
-    return `${pageHead("协作中心", "文献加载中…", "")}<div class="section-card empty-state"><span class="empty-icon">${icon("book")}</span><strong>文献加载中…</strong><p>七百多条文献分析改为按需加载，只下载一次，之后驻留内存。</p></div>`;
+    if (!state.literatureRequest && !state.literatureFailed) {
+      ensureLiterature()
+        .then(() => { if (state.route === "collab") render(); })
+        .catch(() => { if (state.route === "collab") render(); });
+    }
+    if (state.literatureFailed) {
+      return `${pageHead("协作中心", "文献加载失败", "")}<div class="section-card empty-state"><span class="empty-icon">${icon("book")}</span><strong>文献加载失败</strong><p>网络可能不稳定，点重试即可；加载成功后本次会话不再重复下载。</p><button class="button button-primary" data-action="retry-literature">重试</button></div>`;
+    }
+    return `${pageHead("协作中心", "文献加载中…", "")}<div class="section-card empty-state"><span class="empty-icon">${icon("book")}</span><strong>文献加载中…</strong><p>文献正在后台加载，完成后自动显示；本次会话只下载一次。</p></div>`;
   }
   const filter = state.systemFilter || "all";
   const scoped = (state.data?.literature || [])
@@ -2829,6 +2845,7 @@ document.addEventListener("click", (event) => {
   const openRecordButton = event.target.closest("[data-open-record]");
   if (openRecordButton) { openRecord(openRecordButton.dataset.openRecord, openRecordButton.dataset.target); return; }
   const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "retry-literature") { state.literatureFailed = false; render(); return; }
   if (action === "new-upkeep") { upkeepDialog(); return; }
   if (action === "new-idea") { ideaDialog(); return; }
   if (action === "new-rant") { rantDialog(); return; }

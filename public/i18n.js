@@ -577,6 +577,10 @@ const LABDESK_EN = {
   "文献加载中…": "Loading literature…",
   "七百多条文献分析改为按需加载，只下载一次，之后驻留内存。": "700+ analyses now load on demand — downloaded once, then kept in memory.",
   "文献加载失败，请稍后重试。": "Could not load literature — try again.",
+  "文献加载失败": "Could not load literature",
+  "重试": "Retry",
+  "网络可能不稳定，点重试即可；加载成功后本次会话不再重复下载。": "The network may be unstable. Tap retry — once loaded, literature stays in memory for this session.",
+  "文献正在后台加载，完成后自动显示；本次会话只下载一次。": "Literature loads in the background and appears automatically; it downloads only once per session.",
   /* v1.4.6 gap-fill: connection & errors */
   "暂无记录": "No records yet",
   "连接不到课题组服务。请检查网络，或确认实验室 Mac Mini 正在运行。": "Cannot reach the lab server. Check the network, or make sure the lab Mac Mini is running.",
