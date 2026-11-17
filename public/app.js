@@ -1,4 +1,4 @@
-const APP_VERSION = "1.4.5";
+const APP_VERSION = "1.4.6";
 
 const state = {
   route: "overview",
@@ -1463,6 +1463,7 @@ function openIdeaImage(button) {
   modalRoot.innerHTML = `<div class="modal-backdrop" data-close-modal><section class="modal modal-wide image-modal" role="dialog" aria-modal="true">
     <div class="modal-head"><div><h2>${escapeHtml(button.dataset.ideaImageName || "图片")}</h2></div><button class="modal-close" data-close-modal aria-label="关闭">${icon("close")}</button></div>
     <div class="modal-body"><img class="image-preview" src="${url}" alt=""></div></section></div>`;
+  localizeModal();
 }
 
 function openWorkshop(url, title) {
@@ -1650,6 +1651,7 @@ function patchIdea(idea) {
 async function voteIdea(id, direction) {
   const author = voterId();
   const card = document.querySelector(`[data-idea-id="${CSS.escape(id)}"]`);
+  if (card && card.classList.contains("is-pending")) return;
   if (card) card.classList.add("is-pending");
   try {
     const response = await api("/api/ideas/vote", { method: "POST", body: JSON.stringify({ id, direction, author }) });
@@ -1743,6 +1745,7 @@ async function saveMeasure(event) {
 
 async function analyzeRecord(recordId) {
   const card = document.querySelector(`[data-record-id="${CSS.escape(recordId)}"] .record-analysis-body`);
+  if (card && card.querySelector(".analysis-pending")) return;
   if (card) card.innerHTML = `<p class="analysis-pending">${icon("clock")}正在生成趋势反馈，请稍候…</p>`;
   try {
     await api("/api/lab-records/analyze", { method: "POST", body: JSON.stringify({ id: recordId }) });
@@ -1874,7 +1877,7 @@ function startNativeRecording(button, field) {
     try {
       const text = await transcribeAudio(`data:audio/wav;base64,${payload}`);
       appendSpokenText(field, text);
-      showToast(text ? "已转成文字，可直接修改" : "没有识别出内容，请再说一次");
+      showToast(text ? "已转成文字，可直接修改" : "没有识别出内容，请再说一次或直接输入文字");
     } catch (problem) {
       showToast(problem.message || "语音识别失败，请直接输入文字。");
     } finally {
@@ -1976,7 +1979,7 @@ function startNativeDictation(button, field) {
     const spoken = String(text || "").trim();
     if (spoken) field.value = [nativeBase, spoken].filter(Boolean).join(" ").trim();
     setDictateButton(button, "idle");
-    showToast(spoken ? "语音已填入，可直接修改" : "没有识别到内容，可以直接输入文字");
+    showToast(spoken ? "已转成文字，可直接修改" : "没有识别出内容，请再说一次或直接输入文字");
   };
   window.onNativeSpeechError = (code) => {
     finished = true;
@@ -2044,7 +2047,7 @@ function startDictation(button) {
   };
   state.dictation = recognition;
   setDictateButton(button, "recording");
-  showToast("开始录音，说完会自动结束。");
+  showToast("开始录音，说完会自动结束");
   try {
     recognition.start();
   } catch (error) {
@@ -2334,6 +2337,7 @@ function nextWeekStart(weekStart) {
 
 async function downloadLabFile(recordId, index) {
   try {
+    showToast("正在准备文件…");
     const response = await api(`/api/lab-data/${encodeURIComponent(recordId)}/${index}`);
     const blob = await response.blob();
     const record = (state.data?.labRecords || []).find((item) => item.id === recordId);
@@ -2357,6 +2361,18 @@ function showToast(message) {
   toast.classList.add("is-visible");
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2800);
+}
+
+function tr(value) {
+  return (typeof labdeskTranslate === "function") ? labdeskTranslate(value) : value;
+}
+
+function localizeModal() {
+  if (typeof labdeskLocalize === "function") labdeskLocalize(modalRoot);
+}
+
+function confirmLocalized(message) {
+  return window.confirm(tr(message));
 }
 
 function modal(title, subtitle, content, buttons = "", wide = false) {
@@ -2647,6 +2663,7 @@ async function openPdf(itemId) {
     return;
   }
   try {
+    showToast("正在准备文件…");
     const response = await api(`/api/library/file/${encodeURIComponent(itemId)}`);
     const blobUrl = URL.createObjectURL(await response.blob());
     tab.location.href = blobUrl;
@@ -2695,7 +2712,7 @@ function displayPhoto(id, url) {
       if (element.tagName.toLowerCase() === "img") element.src = url;
       else {
         element.classList.remove("record-thumb-placeholder");
-        element.innerHTML = `<img class="record-thumb" src="${url}" alt="现场照片" data-photo-display="${escapeHtml(id)}">`;
+        element.innerHTML = `<img class="record-thumb" src="${url}" alt="${escapeHtml(tr("现场照片"))}" data-photo-display="${escapeHtml(id)}">`;
       }
     });
   });
@@ -2725,6 +2742,7 @@ function loadVisiblePhotos() {
 
 function openLightboxUrl(url, label = "现场记录照片") {
   modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><img class="lightbox-image" src="${url}" alt="${escapeHtml(label)}"></div>`;
+  localizeModal();
 }
 
 function upgradeLightbox(id) {
@@ -2744,12 +2762,14 @@ function showPhoto(id) {
   const quick = state.photoThumbUrls.get(id);
   const openWith = (url, isFull) => {
     modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal data-lightbox-id="${escapeHtml(id)}"><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><img class="lightbox-image ${isFull ? "" : "is-thumb"}" src="${url}" alt="现场记录照片"></div>`;
+    localizeModal();
     displayPhoto(id, url);
     if (!isFull) upgradeLightbox(id);
   };
   if (full) { openWith(full, true); return; }
   if (quick) { openWith(quick, false); return; }
   modalRoot.innerHTML = `<div class="lightbox-backdrop" data-close-modal data-lightbox-id="${escapeHtml(id)}"><button class="modal-close lightbox-close" data-close-modal aria-label="关闭">${icon("close")}</button><div class="lightbox-loading">照片加载中…</div></div>`;
+  localizeModal();
   ensurePhotoWithFallback(id).then((loadedUrl) => {
     if (!modalRoot.querySelector(".lightbox-loading")) return;
     const isThumb = !state.photoUrls.has(id);
@@ -2791,7 +2811,7 @@ document.getElementById("toggle-code").addEventListener("click", (event) => {
   const input = document.getElementById("access-code");
   const show = input.type === "password";
   input.type = show ? "text" : "password";
-  const label = show ? "隐藏访问码" : "显示访问码";
+  const label = tr(show ? "隐藏访问码" : "显示访问码");
   event.currentTarget.setAttribute("aria-label", label);
   event.currentTarget.title = label;
   event.currentTarget.innerHTML = icon(show ? "eye-off" : "eye");
@@ -2813,21 +2833,25 @@ document.addEventListener("click", (event) => {
   if (action === "new-idea") { ideaDialog(); return; }
   if (action === "new-rant") { rantDialog(); return; }
   if (action === "delete-idea") {
-    const ideaId = event.target.closest("[data-action]").dataset.id;
-    if (window.confirm("删除这条想法？") && ideaId) {
+    const trigger = event.target.closest("[data-action]");
+    const ideaId = trigger.dataset.id;
+    if (confirmLocalized("删除这条想法？") && ideaId) {
+      trigger.disabled = true;
       api("/api/ideas/delete", { method: "POST", body: JSON.stringify({ id: ideaId }) })
         .then(() => reloadState()).then(() => showToast("已移入回收站"))
-        .catch((problem) => showToast(problem.message));
+        .catch((problem) => { trigger.disabled = false; showToast(problem.message); });
     }
     return;
   }
   const translateButton = event.target.closest("[data-translate-lit]");
   if (translateButton) {
     const id = translateButton.dataset.translateLit;
+    if (translateButton.disabled) return;
+    translateButton.disabled = true;
     translateButton.textContent = "翻译中…";
     api("/api/literature/translate", { method: "POST", body: JSON.stringify({ id }) })
       .then(() => refreshAfterLiteratureChange())
-      .catch((problem) => { showToast(problem.message); translateButton.textContent = "翻译为英文"; });
+      .catch((problem) => { showToast(problem.message); translateButton.disabled = false; translateButton.textContent = "翻译为英文"; });
     return;
   }
   const voteButton = event.target.closest("[data-vote-idea]");
@@ -2844,17 +2868,32 @@ document.addEventListener("click", (event) => {
   }
   const doneButton = event.target.closest("[data-idea-done]");
   if (doneButton) {
+    if (doneButton.disabled) return;
+    doneButton.disabled = true;
     const idea = (state.data?.ideas || []).find((item) => item.id === doneButton.dataset.ideaDone);
     const target = !(idea && idea.done);
     api("/api/ideas/done", { method: "POST", body: JSON.stringify({ id: doneButton.dataset.ideaDone, done: target }) })
       .then((response) => response.json())
       .then((data) => { patchIdea(data.idea); render(); showToast(target ? "已标记为上线" : "已恢复为待实施"); })
-      .catch((problem) => showToast(problem.message));
+      .catch((problem) => { doneButton.disabled = false; showToast(problem.message); });
     return;
   }
   if (action === "new-hygiene") { openRecord("hygiene", state.data.zones.find((zone) => zone.type === "area")?.id || ""); return; }
   if (action === "new-maintenance") { openRecord("maintenance", state.data.zones.find((zone) => zone.type === "device")?.id || ""); return; }
-  if (action === "refresh-state") { reloadState().then(() => showToast("照片与记录已更新")).catch((problem) => showToast(problem.message)); return; }
+  if (action === "refresh-state") {
+    const refreshButton = event.target.closest("[data-action]");
+    if (refreshButton.disabled) return;
+    const originalLabel = refreshButton.innerHTML;
+    refreshButton.disabled = true;
+    refreshButton.textContent = "正在刷新…";
+    reloadState()
+      .then(() => showToast("照片与记录已更新"))
+      .catch((problem) => showToast(problem.message))
+      .finally(() => {
+        if (refreshButton.isConnected) { refreshButton.disabled = false; refreshButton.innerHTML = originalLabel; }
+      });
+    return;
+  }
   if (action === "load-more-photos") { state.photoPageSize += 12; render(); return; }
   if (action === "upload-pdf") { pdfDialog(); return; }
   if (action === "new-measure") { measureDialog(); return; }
@@ -2866,20 +2905,24 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (action === "delete-literature") {
-    const itemId = event.target.closest("[data-action]").dataset.id;
-    if (window.confirm("删除这条文献分析？") && itemId) {
+    const trigger = event.target.closest("[data-action]");
+    const itemId = trigger.dataset.id;
+    if (confirmLocalized("删除这条文献分析？") && itemId) {
+      trigger.disabled = true;
       api("/api/literature/delete", { method: "POST", body: JSON.stringify({ id: itemId }) })
         .then(() => refreshAfterLiteratureChange()).then(() => showToast("已删除文献分析"))
-        .catch((problem) => showToast(problem.message));
+        .catch((problem) => { trigger.disabled = false; showToast(problem.message); });
     }
     return;
   }
   if (action === "delete-measure") {
-    const itemId = event.target.closest("[data-action]").dataset.id;
-    if (window.confirm("删除这条测量记录及其原始数据？") && itemId) {
+    const trigger = event.target.closest("[data-action]");
+    const itemId = trigger.dataset.id;
+    if (confirmLocalized("删除这条测量记录及其原始数据？") && itemId) {
+      trigger.disabled = true;
       api("/api/lab-records/delete", { method: "POST", body: JSON.stringify({ id: itemId }) })
         .then(() => reloadState()).then(() => showToast("已删除测量记录"))
-        .catch((problem) => showToast(problem.message));
+        .catch((problem) => { trigger.disabled = false; showToast(problem.message); });
     }
     return;
   }
@@ -2887,17 +2930,21 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-action='more-lit']")) { state.litPage += 30; render(); return; }
   const restoreButton = event.target.closest("[data-restore-trash]");
   if (restoreButton) {
+    if (restoreButton.disabled) return;
+    restoreButton.disabled = true;
     api("/api/trash/restore", { method: "POST", body: JSON.stringify({ id: restoreButton.dataset.restoreTrash }) })
       .then(() => reloadState()).then(() => showToast("已恢复"))
-      .catch((problem) => showToast(problem.message));
+      .catch((problem) => { restoreButton.disabled = false; showToast(problem.message); });
     return;
   }
   const purgeButton = event.target.closest("[data-purge-trash]");
   if (purgeButton) {
-    if (!window.confirm("彻底删除后无法恢复，确定？")) return;
+    if (purgeButton.disabled) return;
+    if (!confirmLocalized("彻底删除后无法恢复，确定？")) return;
+    purgeButton.disabled = true;
     api("/api/trash/purge", { method: "POST", body: JSON.stringify({ id: purgeButton.dataset.purgeTrash }) })
       .then(() => reloadState()).then(() => showToast("已彻底删除"))
-      .catch((problem) => showToast(problem.message));
+      .catch((problem) => { purgeButton.disabled = false; showToast(problem.message); });
     return;
   }
   const ideaThumb = event.target.closest("[data-idea-image]");

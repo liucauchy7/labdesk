@@ -1,7 +1,7 @@
 {
-  "version": "1.4.5",
+  "version": "1.4.6",
   "name": "宁志军课题组工作台",
-  "releasedAt": "2026-11-16",
+  "releasedAt": "2026-11-17",
   "android": {
     "versionCode": 20,
     "versionName": "1.6.0",
