@@ -654,6 +654,13 @@ const LABDESK_EN = {
   "单个文件不能超过 8 MB。": "Each file must be under 8 MB.",
   /* v1.4.6 gap-fill: dictation */
   "录音读取失败，请重试。": "Could not read the recording — try again.",
+  "正在打开麦克风…": "Opening microphone…",
+  "录音失败，请重试。": "Recording failed — try again.",
+  "录音为空或太长，请重新录音。": "The recording is empty or too long — try again.",
+  "录音上传不完整，请重试。": "The recording upload was incomplete — try again.",
+  "录音格式不正确，请重试。": "The recording format is invalid — try again.",
+  "语音识别正忙，请稍后重试。": "Speech recognition is busy — try again shortly.",
+  "语音识别失败，请再试一次，或直接输入文字。": "Speech recognition failed — try again or type instead.",
   "当前浏览器无法处理录音，请直接输入文字。": "This browser cannot process recordings — type instead.",
   "语音识别失败，请直接输入文字。": "Speech recognition failed — type instead.",
   "当前环境不能录音，请直接输入文字。": "Recording is unavailable here — type instead.",

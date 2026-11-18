@@ -9,6 +9,7 @@ import ipaddress
 import json
 import mimetypes
 import os
+import queue
 import re
 import secrets
 import socket
@@ -62,6 +63,7 @@ ASR_WORKER = Path(__file__).resolve().parent / "asr_worker.py"
 ASR_MODEL = ""
 ASR_TIMEOUT = 120
 ASR_READY = False
+ASR_ENGINE = None
 PDF_PYTHON = ""
 PDF_WORKER = Path(__file__).resolve().parent / "pdf_worker.py"
 PDF_TIMEOUT = 120
@@ -95,6 +97,78 @@ def load_zones():
 
 
 ZONES = load_zones()
+
+
+class SpeechWorker:
+    """One MLX process; only one inference in flight, including during restarts."""
+
+    def __init__(self, python, script, environment, timeout):
+        self.command = [python, str(script), "--serve"]
+        self.environment = environment
+        self.timeout = timeout
+        self.lock = threading.Lock()
+        self.process = None
+        self.output = None
+
+    @staticmethod
+    def read_output(pipe, output):
+        with pipe:
+            while True:
+                line = pipe.readline(32768)
+                try:
+                    output.put_nowait(line)
+                except queue.Full:
+                    return
+                if not line.endswith(b"\n"):
+                    return
+
+    def stop(self):
+        process, self.process = self.process, None
+        self.output = None
+        if process is None:
+            return
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+        process.wait()
+
+    def transcribe(self, audio_path):
+        if not self.lock.acquire(timeout=5):
+            raise BlockingIOError("Speech worker busy")
+        try:
+            if self.process is None or self.process.poll() is not None:
+                self.stop()
+                self.process = subprocess.Popen(
+                    self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, env=self.environment,
+                )
+                self.output = queue.Queue(maxsize=1)
+                threading.Thread(target=self.read_output, args=(self.process.stdout, self.output), daemon=True).start()
+            request = (json.dumps({"path": str(audio_path)}) + "\n").encode("ascii")
+            self.process.stdin.write(request)
+            self.process.stdin.flush()
+            try:
+                line = self.output.get(timeout=self.timeout)
+            except queue.Empty:
+                raise subprocess.TimeoutExpired(self.command, self.timeout) from None
+            if not line.endswith(b"\n"):
+                raise OSError("Speech worker closed its response pipe")
+            result = json.loads(line)
+            if not isinstance(result, dict) or not ("text" in result or "error" in result):
+                raise ValueError("Invalid speech worker response")
+            return result
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            self.stop()
+            raise
+        finally:
+            self.lock.release()
+
+    def close(self):
+        with self.lock:
+            self.stop()
 
 
 WORKSHOP = [
@@ -925,6 +999,7 @@ class Handler(BaseHTTPRequestHandler):
                 "asr": {
                     "ready": ASR_READY,
                     "model": Path(ASR_MODEL).name if ASR_READY else "",
+                    "wavUpload": ASR_READY,
                 },
             }, {"ETag": etag})
             return
@@ -1129,6 +1204,15 @@ class Handler(BaseHTTPRequestHandler):
         if not self.require_token():
             return
         try:
+            if path == "/api/transcribe" and self.headers.get_content_type() == "audio/wav":
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_SPEECH:
+                    raise ValueError("录音为空或太长，请重新录音。")
+                payload = self.rfile.read(length)
+                if len(payload) != length:
+                    raise ValueError("录音上传不完整，请重试。")
+                self.transcribe_wav(payload)
+                return
             body = self.read_json()
             if path == "/api/records":
                 self.create_record(body)
@@ -1599,6 +1683,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = base64.b64decode(raw[prefix.end():], validate=False)
         except (ValueError, TypeError):
             raise ValueError("录音数据无法解析，请重试。")
+        self.transcribe_wav(payload)
+
+    def transcribe_wav(self, payload):
+        if not ASR_READY:
+            self.send_json(503, {"error": "这台服务器还没有配置语音识别，请直接输入文字。"})
+            return
         if not payload:
             raise ValueError("没有收到录音，请再试一次。")
         if len(payload) > MAX_SPEECH:
@@ -1608,42 +1698,33 @@ class Handler(BaseHTTPRequestHandler):
         audio_path = temp_dir / ("speech-%s.wav" % uuid.uuid4().hex)
         audio_path.write_bytes(payload)
         try:
-            with wave.open(str(audio_path), "rb") as handle:
-                seconds = handle.getnframes() / float(handle.getframerate() or 1)
+            try:
+                with wave.open(str(audio_path), "rb") as handle:
+                    if handle.getsampwidth() != 2 or not (8000 <= handle.getframerate() <= 96000) or handle.getnchannels() not in (1, 2):
+                        raise wave.Error("Unsupported PCM format")
+                    seconds = handle.getnframes() / handle.getframerate()
+            except (EOFError, wave.Error):
+                raise ValueError("录音格式不正确，请重试。") from None
             if seconds < 0.4:
                 self.send_json(200, {"text": "", "error": "录音太短，请说完再点一次。"})
                 return
             if seconds > 120:
                 raise ValueError("录音超过 2 分钟，请分几次说。")
-            environment = dict(os.environ)
-            environment.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-            environment.setdefault("HF_HOME", str(STORAGE.parent / "asr" / "cache"))
-            environment["LAB_ASR_MODEL"] = ASR_MODEL
-            environment.pop("PYTHONPATH", None)
-            completed = subprocess.run(
-                [ASR_PYTHON, str(ASR_WORKER), str(audio_path)],
-                capture_output=True, text=True, timeout=ASR_TIMEOUT, env=environment,
-            )
-        except subprocess.TimeoutExpired:
-            self.send_json(504, {"error": "语音识别超时，请说短一点再试。"})
-            return
+            try:
+                result = ASR_ENGINE.transcribe(audio_path)
+            except BlockingIOError:
+                self.send_json(503, {"error": "语音识别正忙，请稍后重试。"})
+                return
+            except subprocess.TimeoutExpired:
+                self.send_json(504, {"error": "语音识别超时，请说短一点再试。"})
+                return
+            except (OSError, ValueError) as exc:
+                result = {"error": type(exc).__name__}
         finally:
             audio_path.unlink(missing_ok=True)
-        output = (completed.stdout or "").strip().splitlines()
-        result = {}
-        for line in reversed(output):
-            try:
-                result = json.loads(line)
-                break
-            except ValueError:
-                continue
-        if not result:
-            print("Speech worker failed: %s" % (completed.stderr or "")[-400:])
-            self.send_json(503, {"error": "语音识别失败，请直接输入文字。"})
-            return
         if result.get("error"):
             print("Speech worker error: %s" % result["error"])
-            self.send_json(503, {"error": "没有识别出内容，请再说一次，或直接输入文字。"})
+            self.send_json(503, {"error": "语音识别失败，请再试一次，或直接输入文字。"})
             return
         self.send_json(200, {"text": clean_text(result.get("text"), 2000)})
 
@@ -2104,7 +2185,7 @@ class LabHTTPServer(ThreadingHTTPServer):
 
 def main():
     global TOKEN, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, STORAGE, UPLOADS, LIBRARY, LABDATA, IDEAMEDIA, DB_PATH
-    global ASR_PYTHON, ASR_MODEL, ASR_READY, ASR_TIMEOUT
+    global ASR_PYTHON, ASR_MODEL, ASR_READY, ASR_TIMEOUT, ASR_ENGINE
     global PDF_PYTHON, PDF_READY, PDF_TIMEOUT
     global LLM_FALLBACK_BASE_URL, LLM_FALLBACK_MODEL, LLM_FALLBACK_API_KEY
     parser = argparse.ArgumentParser(description="Run the lab workspace app behind a local HTTPS tunnel.")
@@ -2142,6 +2223,12 @@ def main():
     except ValueError:
         ASR_TIMEOUT = 120
     ASR_READY = bool(ASR_PYTHON) and Path(ASR_PYTHON).is_file() and ASR_WORKER.is_file()
+    if ASR_READY:
+        environment = dict(os.environ, LAB_ASR_MODEL=ASR_MODEL)
+        environment.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+        environment.setdefault("HF_HOME", str(STORAGE.parent / "asr" / "cache"))
+        environment.pop("PYTHONPATH", None)
+        ASR_ENGINE = SpeechWorker(ASR_PYTHON, ASR_WORKER, environment, ASR_TIMEOUT)
     PDF_PYTHON = os.environ.get("LAB_PDF_PYTHON", "").strip() or ASR_PYTHON
     try:
         PDF_TIMEOUT = max(30, int(os.environ.get("LAB_PDF_TIMEOUT", "120")))
@@ -2182,6 +2269,8 @@ def main():
         print("\nStopping lab workspace server.")
     finally:
         server.server_close()
+        if ASR_ENGINE is not None:
+            ASR_ENGINE.close()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-const APP_VERSION = "1.4.7";
+const APP_VERSION = "1.4.8";
 
 const state = {
   route: "overview",
@@ -1775,10 +1775,12 @@ async function analyzeRecord(recordId) {
 function setDictateButton(button, mode) {
   if (!button) return;
   button.classList.toggle("is-recording", mode === "recording");
-  button.disabled = mode === "busy";
+  button.disabled = mode === "busy" || mode === "starting";
   if (mode === "busy") button.innerHTML = `${icon("clock")}正在识别…`;
+  else if (mode === "starting") button.innerHTML = `${icon("clock")}正在打开麦克风…`;
   else if (mode === "recording") button.innerHTML = `${icon("mic")}结束录音`;
   else button.innerHTML = `${icon("mic")}语音输入`;
+  if (typeof labdeskLocalize === "function") labdeskLocalize(button);
 }
 
 function appendSpokenText(field, spoken) {
@@ -1851,14 +1853,18 @@ async function recordingToWav(blob) {
   const context = new AudioCtx();
   try {
     const audio = await context.decodeAudioData(await blob.arrayBuffer());
-    return encodeWav(downsampleBuffer(audio.getChannelData(0), audio.sampleRate, 16000), 16000);
+    const rate = Math.min(audio.sampleRate, 16000);
+    return encodeWav(downsampleBuffer(audio.getChannelData(0), audio.sampleRate, rate), rate);
   } finally {
     if (context.close) context.close().catch(() => {});
   }
 }
 
-async function transcribeAudio(base64Audio) {
-  const response = await api("/api/transcribe", { method: "POST", body: JSON.stringify({ audio: base64Audio }) });
+async function transcribeAudio(audio) {
+  const direct = audio instanceof Blob && state.data?.asr?.wavUpload;
+  const response = await api("/api/transcribe", direct
+    ? { method: "POST", headers: { "Content-Type": "audio/wav" }, body: audio }
+    : { method: "POST", body: JSON.stringify({ audio: typeof audio === "string" ? audio : await blobToBase64(audio) }) });
   const result = await response.json();
   if (result.error) throw new Error(result.error);
   return String(result.text || "").trim();
@@ -1920,9 +1926,12 @@ async function startRecordingDictation(button, field) {
     return;
   }
   let stream;
+  setDictateButton(button, "starting");
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   } catch (problem) {
+    if (!field.isConnected) return;
+    setDictateButton(button, "idle");
     if (startNativeRecording(button, field)) return;
     const help = document.getElementById("mic-help");
     const inApp = /LabDeskApp/.test(navigator.userAgent || "");
@@ -1939,6 +1948,10 @@ async function startRecordingDictation(button, field) {
     showToast("没有拿到麦克风权限，请按提示处理，或直接输入文字。");
     return;
   }
+  if (!field.isConnected) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
   let recorder;
   try {
     recorder = new MediaRecorder(stream);
@@ -1949,23 +1962,40 @@ async function startRecordingDictation(button, field) {
   }
   const chunks = [];
   recorder.ondataavailable = (event) => { if (event.data && event.data.size) chunks.push(event.data); };
+  let cancelled = false;
   const session = {
     timer: 0,
-    stop: () => { try { recorder.stop(); } catch (error) { /* already stopped */ } },
-    cancel: () => { state.cancelDictation = true; session.stop(); },
+    browserRecording: true,
+    stop: () => {
+      if (recorder.state === "inactive") return;
+      setDictateButton(button, "busy");
+      recorder.stop();
+    },
+    cancel: () => { cancelled = true; session.stop(); },
   };
-  recorder.onstop = async () => {
+  const release = () => {
     clearTimeout(session.timer);
     stream.getTracks().forEach((track) => track.stop());
-    state.dictation = null;
-    if (state.cancelDictation) { state.cancelDictation = false; setDictateButton(button, "idle"); return; }
+    if (state.dictation === session) state.dictation = null;
+  };
+  recorder.onerror = () => {
+    cancelled = true;
+    release();
+    setDictateButton(button, "idle");
+    if (field.isConnected) showToast("录音失败，请重试。");
+  };
+  recorder.onstop = async () => {
+    release();
+    if (cancelled || !field.isConnected) { setDictateButton(button, "idle"); return; }
     const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
     if (!blob.size) { setDictateButton(button, "idle"); showToast("没有录到声音，请再说一次。"); return; }
     setDictateButton(button, "busy");
     showToast("正在把录音转成文字…");
     try {
       const wav = await recordingToWav(blob);
-      const text = await transcribeAudio(await blobToBase64(wav));
+      if (!field.isConnected) return;
+      const text = await transcribeAudio(wav);
+      if (!field.isConnected) return;
       appendSpokenText(field, text);
       showToast(text ? "已转成文字，可直接修改" : "没有识别出内容，请再说一次或直接输入文字");
     } catch (problem) {
@@ -1974,9 +2004,14 @@ async function startRecordingDictation(button, field) {
       setDictateButton(button, "idle");
     }
   };
+  try {
+    recorder.start();
+  } catch (_) {
+    recorder.onerror();
+    return;
+  }
   state.dictation = session;
   setDictateButton(button, "recording");
-  recorder.start();
   showToast("正在录音，说完再点一次结束");
   session.timer = setTimeout(() => { if (state.dictation === session) session.stop(); }, 60000);
 }
@@ -2016,9 +2051,13 @@ function startDictation(button) {
   const field = document.getElementById("measure-conditions");
   if (!field) return;
   if (state.dictation) {
-    state.dictation.stop();
-    state.dictation = null;
-    setDictateButton(button, "idle");
+    if (state.dictation.browserRecording) {
+      state.dictation.stop();
+    } else {
+      state.dictation.stop();
+      state.dictation = null;
+      setDictateButton(button, "idle");
+    }
     return;
   }
   const asr = state.data?.asr || {};
@@ -2397,6 +2436,7 @@ function modal(title, subtitle, content, buttons = "", wide = false) {
 }
 
 function closeModal() {
+  if (state.dictation?.browserRecording) state.dictation.cancel();
   modalRoot.innerHTML = "";
 }
 

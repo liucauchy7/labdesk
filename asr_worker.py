@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Transcribe a 16 kHz mono WAV file with mlx-whisper and print JSON.
+"""Transcribe PCM WAV in the ASR virtualenv, keeping MLX warm in --serve mode."""
 
-Runs in a separate interpreter (the ASR virtualenv) so the main web server does
-not need machine-learning dependencies loaded into its own process.
-"""
-
+import contextlib
 import json
 import os
 import sys
@@ -35,16 +32,17 @@ def load_wav(path):
     return samples
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "缺少音频文件路径"}, ensure_ascii=False))
-        return 2
-    model = os.environ.get("LAB_ASR_MODEL", "mlx-community/whisper-small-mlx")
+DEFAULT_PROMPT = (
+    "测量记录：锡铅体系。添加剂是分子B，基底是ITO玻璃。"
+    "工艺包括钙钛矿量子点旋涂、乙酸乙酯反溶剂和退火。"
+)
+
+
+def recognize(path, model, prompt):
     try:
-        audio = load_wav(sys.argv[1])
-        if audio.shape[0] < 16000 * 0.4:
-            print(json.dumps({"text": "", "error": "录音太短"}, ensure_ascii=False))
-            return 0
+        audio = load_wav(path)
+        if audio.size < 16000 * 0.4 or not np.any(audio):
+            return {"text": ""}
         from mlx_whisper import transcribe
 
         result = transcribe(
@@ -54,14 +52,34 @@ def main():
             task="transcribe",
             temperature=0.0,
             condition_on_previous_text=False,
-            initial_prompt="太阳能电池实验条件记录，例如锡铅钙钛矿、退火温度、旋涂转速、界面钝化、添加剂。",
+            initial_prompt=prompt or None,
         )
-        text = " ".join(str(result.get("text", "")).split())
-        print(json.dumps({"text": text}, ensure_ascii=False))
-        return 0
-    except Exception as exc:  # pragma: no cover - reported to the caller
-        print(json.dumps({"error": "%s: %s" % (type(exc).__name__, exc)}, ensure_ascii=False))
-        return 1
+        return {"text": " ".join(str(result.get("text", "")).split())[:2000]}
+    except Exception as exc:
+        # Don't emit any audio, transcript, or request path in errors.
+        return {"error": type(exc).__name__}
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(json.dumps({"error": "缺少音频文件路径"}))
+        return 2
+    model = os.environ.get("LAB_ASR_MODEL", "mlx-community/whisper-small-mlx")
+    prompt = os.environ.get("LAB_ASR_PROMPT", DEFAULT_PROMPT)
+    if sys.argv[1] != "--serve":
+        result = recognize(sys.argv[1], model, prompt)
+        print(json.dumps(result))
+        return int("error" in result)
+    for line in sys.stdin:
+        try:
+            path = json.loads(line)["path"]
+            # Reserve stdout exclusively for the parent process's JSON messages.
+            with contextlib.redirect_stdout(sys.stderr):
+                result = recognize(path, model, prompt)
+        except (TypeError, ValueError, KeyError):
+            result = {"error": "InvalidRequest"}
+        print(json.dumps(result), flush=True)
+    return 0
 
 
 if __name__ == "__main__":
